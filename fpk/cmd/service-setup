@@ -1,0 +1,42 @@
+#!/bin/bash
+
+PHOTOS_DIR="/vol2/photos"
+CONFIG_DIR="/vol1/docker/livephoto-worker/config"
+DEFAULT_CONFIG="${CONFIG_DIR}/config.json"
+
+create_livemotion_defaults() {
+    mkdir -p "${PHOTOS_DIR}/live_inbox" "${PHOTOS_DIR}/motion_output" "${PHOTOS_DIR}/archive" "${PHOTOS_DIR}/failed" 2>/dev/null || true
+    mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
+    if [ ! -f "$DEFAULT_CONFIG" ]; then
+        cat > "$DEFAULT_CONFIG" <<'JSON'
+{
+  "input_dir": "/photos/live_inbox",
+  "output_dir": "/photos/motion_output",
+  "archive_dir": "/photos/archive",
+  "failed_dir": "/photos/failed",
+  "stable_seconds": 30,
+  "poll_interval": 10,
+  "move_originals": true,
+  "enable_archive": true
+}
+JSON
+    fi
+}
+
+validate_preinst() {
+    if ! command -v docker >/dev/null 2>&1; then
+        error_exit "未检测到 Docker。LiveMotion FPK 需要 fnOS Docker 支持。"
+    fi
+}
+
+service_postinst() {
+    create_livemotion_defaults
+}
+
+service_postupgrade() {
+    create_livemotion_defaults
+}
+
+service_postconfig() {
+    create_livemotion_defaults
+}

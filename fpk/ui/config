@@ -1,0 +1,15 @@
+{
+    ".url": {
+        "livemotion.Application":
+        {
+            "title": "LiveMotion",
+            "desc": "Live Photo to Google Motion Photo Worker",
+            "icon": "images/{0}.png",
+            "type": "url",
+            "port": "8011",
+            "protocol": "http",
+            "url": "/",
+            "allUsers": true
+        }
+    }
+}

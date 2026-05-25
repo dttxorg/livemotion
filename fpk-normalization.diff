@@ -1,0 +1,561 @@
+--- fpk directory diff (before -> after) ---
+Only in fpk/cmd: common
+Only in fpk/cmd: config_callback
+Only in fpk/cmd: config_init
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/install_callback fpk/cmd/install_callback
+--- dist/fpk-before/fpk/cmd/install_callback	2026-05-25 09:44:59
++++ fpk/cmd/install_callback	2026-05-25 09:50:03
+@@ -1,24 +1,3 @@
+ #!/bin/bash
+-PHOTOS_DIR="/vol2/photos"
+-CONFIG_DIR="/vol1/docker/livephoto-worker/config"
+-CONFIG_FILE="${CONFIG_DIR}/config.json"
+-
+-mkdir -p "${PHOTOS_DIR}/live_inbox" "${PHOTOS_DIR}/motion_output" "${PHOTOS_DIR}/archive" "${PHOTOS_DIR}/failed" 2>/dev/null || true
+-mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
+-
+-if [ ! -f "$CONFIG_FILE" ]; then
+-    cat > "$CONFIG_FILE" <<'JSON'
+-{
+-  "input_dir": "/photos/live_inbox",
+-  "output_dir": "/photos/motion_output",
+-  "archive_dir": "/photos/archive",
+-  "failed_dir": "/photos/failed",
+-  "stable_seconds": 30,
+-  "poll_interval": 10,
+-  "move_originals": true,
+-  "enable_archive": true
+-}
+-JSON
+-fi
+-
+-exit 0
++. $(dirname $0)/installer
++$(basename $0) > $TRIM_TEMP_LOGFILE
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/install_init fpk/cmd/install_init
+--- dist/fpk-before/fpk/cmd/install_init	2026-05-25 09:44:59
++++ fpk/cmd/install_init	2026-05-25 09:50:03
+@@ -1,8 +1,3 @@
+ #!/bin/bash
+-if ! command -v docker >/dev/null 2>&1; then
+-    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+-        echo "未检测到 Docker。LiveMotion FPK 需要 fnOS Docker 支持。" > "${TRIM_TEMP_LOGFILE}"
+-    fi
+-    exit 1
+-fi
+-exit 0
++. $(dirname $0)/installer
++$(basename $0) > $TRIM_TEMP_LOGFILE
+Only in fpk/cmd: installer
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/main fpk/cmd/main
+--- dist/fpk-before/fpk/cmd/main	2026-05-25 09:44:59
++++ fpk/cmd/main	2026-05-25 09:50:03
+@@ -1,32 +1,18 @@
+ #!/bin/bash
+-COMPOSE_FILE="${TRIM_APPDEST}/docker/docker-compose.yml"
+-CONTAINER_NAME="livemotion"
+-
+-is_docker_running() {
+-    if command -v docker >/dev/null 2>&1; then
+-        docker inspect "$CONTAINER_NAME" 2>/dev/null | grep -q '"Status": "running",'
+-        return $?
++FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
++is_docker_running () {
++    DOCKER_NAME=""
++    if [ -f "$FILE_PATH" ]; then
++        DOCKER_NAME=$(grep "container_name" "$FILE_PATH" | awk -F ':' '{print $2}' | xargs)
+     fi
+-    return 1
+-}
+-
+-case "${1:-}" in
+-start)
+-    if command -v docker >/dev/null 2>&1 && [ -f "$COMPOSE_FILE" ]; then
+-        docker compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1 || true
++    if [ -n "$DOCKER_NAME" ]; then
++        docker inspect "$DOCKER_NAME" | grep -q '"Status": "running",' || exit 1
++        return
+     fi
+-    exit 0
+-    ;;
+-stop)
+-    if command -v docker >/dev/null 2>&1 && [ -f "$COMPOSE_FILE" ]; then
+-        docker compose -f "$COMPOSE_FILE" down >/dev/null 2>&1 || true
+-    fi
+-    exit 0
+-    ;;
+-status)
+-    if is_docker_running; then exit 0; else exit 3; fi
+-    ;;
+-*)
+-    exit 1
+-    ;;
++}
++case $1 in
++start) exit 0 ;;
++stop) exit 0 ;;
++status) if is_docker_running; then exit 0; else exit 3; fi ;;
++*) exit 1 ;;
+ esac
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/service-setup fpk/cmd/service-setup
+--- dist/fpk-before/fpk/cmd/service-setup	2026-05-25 09:44:59
++++ fpk/cmd/service-setup	2026-05-25 09:50:03
+@@ -23,6 +23,12 @@
+     fi
+ }
+ 
++validate_preinst() {
++    if ! command -v docker >/dev/null 2>&1; then
++        error_exit "未检测到 Docker。LiveMotion FPK 需要 fnOS Docker 支持。"
++    fi
++}
++
+ service_postinst() {
+     create_livemotion_defaults
+ }
+@@ -31,8 +37,6 @@
+     create_livemotion_defaults
+ }
+ 
+-service_preuninst() {
+-    if command -v docker >/dev/null 2>&1 && [ -f "${TRIM_APPDEST}/docker/docker-compose.yml" ]; then
+-        docker compose -f "${TRIM_APPDEST}/docker/docker-compose.yml" down >/dev/null 2>&1 || true
+-    fi
++service_postconfig() {
++    create_livemotion_defaults
+ }
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/uninstall_callback fpk/cmd/uninstall_callback
+--- dist/fpk-before/fpk/cmd/uninstall_callback	2026-05-25 09:44:59
++++ fpk/cmd/uninstall_callback	2026-05-25 09:50:03
+@@ -1,8 +1,3 @@
+ #!/bin/bash
+-COMPOSE_FILE="${TRIM_APPDEST}/docker/docker-compose.yml"
+-if command -v docker >/dev/null 2>&1 && [ -f "$COMPOSE_FILE" ]; then
+-    docker compose -f "$COMPOSE_FILE" down >/dev/null 2>&1 || true
+-fi
+-
+-echo "LiveMotion 已卸载。默认保留 /vol2/photos 与 /vol1/docker/livephoto-worker/config 中的数据。"
+-exit 0
++. $(dirname $0)/installer
++$(basename $0) > $TRIM_TEMP_LOGFILE
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/uninstall_init fpk/cmd/uninstall_init
+--- dist/fpk-before/fpk/cmd/uninstall_init	2026-05-25 09:44:59
++++ fpk/cmd/uninstall_init	2026-05-25 09:50:03
+@@ -1,2 +1,3 @@
+ #!/bin/bash
+-exit 0
++. $(dirname $0)/installer
++$(basename $0) > $TRIM_TEMP_LOGFILE
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/upgrade_callback fpk/cmd/upgrade_callback
+--- dist/fpk-before/fpk/cmd/upgrade_callback	2026-05-25 09:44:59
++++ fpk/cmd/upgrade_callback	2026-05-25 09:50:03
+@@ -1,6 +1,3 @@
+ #!/bin/bash
+-PHOTOS_DIR="/vol2/photos"
+-CONFIG_DIR="/vol1/docker/livephoto-worker/config"
+-mkdir -p "${PHOTOS_DIR}/live_inbox" "${PHOTOS_DIR}/motion_output" "${PHOTOS_DIR}/archive" "${PHOTOS_DIR}/failed" 2>/dev/null || true
+-mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
+-exit 0
++. $(dirname $0)/installer
++$(basename $0) > $TRIM_TEMP_LOGFILE
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/cmd/upgrade_init fpk/cmd/upgrade_init
+--- dist/fpk-before/fpk/cmd/upgrade_init	2026-05-25 09:44:59
++++ fpk/cmd/upgrade_init	2026-05-25 09:50:03
+@@ -1,6 +1,3 @@
+ #!/bin/bash
+-CONFIG_FILE="/vol1/docker/livephoto-worker/config/config.json"
+-if [ -f "$CONFIG_FILE" ]; then
+-    cp "$CONFIG_FILE" "${CONFIG_FILE}.pre-upgrade.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+-fi
+-exit 0
++. $(dirname $0)/installer
++$(basename $0) > $TRIM_TEMP_LOGFILE
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/config/privilege fpk/config/privilege
+--- dist/fpk-before/fpk/config/privilege	2026-05-25 09:44:59
++++ fpk/config/privilege	2026-05-25 09:50:03
+@@ -1,7 +1,7 @@
+ {
+-  "defaults": {
+-    "run-as": "package"
+-  },
+-  "username": "livemotion",
+-  "groupname": "livemotion"
++    "defaults": {
++        "run-as": "package"
++    },
++    "username": "livemotion",
++    "groupname": "livemotion"
+ }
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/config/resource fpk/config/resource
+--- dist/fpk-before/fpk/config/resource	2026-05-25 09:44:59
++++ fpk/config/resource	2026-05-25 09:50:03
+@@ -1,25 +1,25 @@
+ {
+-  "port-config": {
+-    "protocol-file": "LiveMotion.sc"
+-  },
+-  "docker-project": {
+-    "projects": [
+-      {
+-        "name": "livemotion",
+-        "path": "docker"
+-      }
+-    ]
+-  },
+-  "data-share": {
+-    "shares": [
+-      {
+-        "name": "LiveMotion",
+-        "permission": {
+-          "rw": [
+-            "livemotion"
+-          ]
+-        }
+-      }
+-    ]
+-  }
++    "port-config": {
++        "protocol-file": "LiveMotion.sc"
++    },
++    "data-share": {
++        "shares": [
++            {
++                "name": "LiveMotion",
++                "permission": {
++                    "rw": [
++                        "livemotion"
++                    ]
++                }
++            }
++        ]
++    },
++    "docker-project": {
++        "projects": [
++            {
++                "name": "livemotion",
++                "path": "docker"
++            }
++        ]
++    }
+ }
+Only in dist/fpk-before/fpk/docker: Dockerfile
+Only in fpk/docker: docker-compose.yaml
+Only in dist/fpk-before/fpk/docker: docker-compose.yml
+Only in dist/fpk-before/fpk: icon.svg
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/manifest fpk/manifest
+--- dist/fpk-before/fpk/manifest	2026-05-25 09:44:59
++++ fpk/manifest	2026-05-25 09:50:03
+@@ -9,7 +9,8 @@
+ desktop_uidir   = ui
+ desktop_applaunchname = livemotion.Application
+ service_port    = 8011
+-checkport       = true
++checkport       = false
+ desc            = Live Photo 转 Google Motion Photo 的 Web 配置 Docker Worker。
+ source          = thirdparty
+ checksum        = 
++fpk_version     = 0.1.0-r1
+Only in dist/fpk-before/fpk: manifest.json
+diff -ru --exclude=*.PNG --exclude=*.png dist/fpk-before/fpk/ui/config fpk/ui/config
+--- dist/fpk-before/fpk/ui/config	2026-05-25 09:44:59
++++ fpk/ui/config	2026-05-25 09:50:03
+@@ -1,14 +1,15 @@
+ {
+-  ".url": {
+-    "livemotion.Application": {
+-      "title": "LiveMotion",
+-      "desc": "Live Photo to Google Motion Photo Worker",
+-      "icon": "images/{0}.png",
+-      "type": "url",
+-      "port": "8011",
+-      "protocol": "http",
+-      "url": "/",
+-      "allUsers": true
++    ".url": {
++        "livemotion.Application":
++        {
++            "title": "LiveMotion",
++            "desc": "Live Photo to Google Motion Photo Worker",
++            "icon": "images/{0}.png",
++            "type": "url",
++            "port": "8011",
++            "protocol": "http",
++            "url": "/",
++            "allUsers": true
++        }
+     }
+-  }
+ }
+Only in fpk/wizard: config
+Only in dist/fpk-before/fpk/wizard: install
+--- build-fpk.sh diff (before -> after) ---
+--- dist/fpk-before/build-fpk.sh	2026-05-25 09:44:59
++++ build-fpk.sh	2026-05-25 10:10:31
+@@ -13,7 +13,7 @@
+ 
+ [ -d "$FPK_DIR" ] || fail "Missing fpk directory: $FPK_DIR"
+ [ -f "$FPK_DIR/manifest" ] || fail "Missing fpk/manifest"
+-[ -f "$FPK_DIR/manifest.json" ] || fail "Missing fpk/manifest.json"
++[ ! -f "$FPK_DIR/manifest.json" ] || fail "fpk/manifest.json is not present in the installable fnOS samples; remove it from package source"
+ if [ -f "$FPK_DIR/ICON.PNG" ]; then
+     ICON_64="$FPK_DIR/ICON.PNG"
+ elif [ -f "$FPK_DIR/icon.png" ]; then
+@@ -22,10 +22,10 @@
+     fail "Missing fpk/ICON.PNG or fpk/icon.png"
+ fi
+ [ -f "$FPK_DIR/ICON_256.PNG" ] || fail "Missing fpk/ICON_256.PNG"
+-[ -f "$FPK_DIR/docker/docker-compose.yml" ] || fail "Missing fpk/docker/docker-compose.yml"
+-[ -f "$FPK_DIR/docker/Dockerfile" ] || fail "Missing fpk/docker/Dockerfile"
+-[ -d "$SCRIPT_DIR/src" ] || fail "Missing src directory"
+-[ -f "$SCRIPT_DIR/requirements.txt" ] || fail "Missing requirements.txt"
++[ -f "$FPK_DIR/docker/docker-compose.yaml" ] || fail "Missing fpk/docker/docker-compose.yaml"
++[ ! -f "$FPK_DIR/docker/docker-compose.yml" ] || fail "Use docker-compose.yaml to match installable fnOS samples, not docker-compose.yml"
++[ ! -f "$FPK_DIR/docker/Dockerfile" ] || fail "FPK must not include Dockerfile; use prebuilt image mode"
++[ -f "$SCRIPT_DIR/Dockerfile" ] || fail "Missing project Dockerfile for local/CI image builds"
+ 
+ mkdir -p "$DIST_DIR"
+ WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/livemotion-fpk.XXXXXX")
+@@ -35,34 +35,28 @@
+ 
+ info "Staging package in $WORK_DIR"
+ 
+-# Build the Docker project directory that fnOS can use directly from package root.
+-cp "$FPK_DIR/docker/docker-compose.yml" "$APP_PAYLOAD_DIR/docker/docker-compose.yml"
+-cp "$FPK_DIR/docker/Dockerfile" "$APP_PAYLOAD_DIR/docker/Dockerfile"
+-cp "$SCRIPT_DIR/requirements.txt" "$APP_PAYLOAD_DIR/docker/requirements.txt"
+-cp -R "$SCRIPT_DIR/src" "$APP_PAYLOAD_DIR/docker/src"
+-cp -R "$APP_PAYLOAD_DIR/docker" "$PKG_DIR/docker"
++# Prebuilt-image mode: FPK payload contains only Compose metadata, no source/build context.
++cp "$FPK_DIR/docker/docker-compose.yaml" "$APP_PAYLOAD_DIR/docker/docker-compose.yaml"
++cp -R "$FPK_DIR/ui" "$APP_PAYLOAD_DIR/ui"
+ 
+-# Keep app.tgz for fnOS packaging flows that expect target payload archives.
+ (
+     cd "$APP_PAYLOAD_DIR"
+-    COPYFILE_DISABLE=1 tar -czf "$PKG_DIR/app.tgz" docker
++    COPYFILE_DISABLE=1 tar -czf "$PKG_DIR/app.tgz" docker ui
+ )
+ 
+-# Copy fnOS package metadata and lifecycle files.
++# FPK root layout follows downloaded installable samples.
+ cp "$FPK_DIR/manifest" "$PKG_DIR/manifest"
+-cp "$FPK_DIR/manifest.json" "$PKG_DIR/manifest.json"
+ cp "$FPK_DIR/LiveMotion.sc" "$PKG_DIR/LiveMotion.sc"
+ cp "$ICON_64" "$PKG_DIR/ICON.PNG"
+ cp "$FPK_DIR/ICON_256.PNG" "$PKG_DIR/ICON_256.PNG"
+ cp -R "$FPK_DIR/cmd" "$PKG_DIR/cmd"
+ cp -R "$FPK_DIR/config" "$PKG_DIR/config"
+ cp -R "$FPK_DIR/ui" "$PKG_DIR/ui"
+-cp -R "$FPK_DIR/wizard" "$PKG_DIR/wizard"
+-if [ -d "$FPK_DIR/assets" ]; then
+-    cp -R "$FPK_DIR/assets" "$PKG_DIR/assets"
++if [ -d "$FPK_DIR/wizard" ]; then
++    cp -R "$FPK_DIR/wizard" "$PKG_DIR/wizard"
+ fi
+ 
+-# Patch checksum in the fnOS-style manifest.
++# Patch checksum in manifest from app.tgz, as installable samples do.
+ if command -v md5sum >/dev/null 2>&1; then
+     CHECKSUM=$(md5sum "$PKG_DIR/app.tgz" | awk '{print $1}')
+ else
+@@ -89,7 +83,7 @@
+ 
+ TAR_LIST="$WORK_DIR/package-files.txt"
+ : > "$TAR_LIST"
+-for item in manifest manifest.json app.tgz docker cmd config ui ICON.PNG ICON_256.PNG LiveMotion.sc wizard assets; do
++for item in LiveMotion.sc ICON.PNG ICON_256.PNG app.tgz cmd config manifest ui wizard; do
+     if [ -e "$PKG_DIR/$item" ]; then
+         printf '%s\n' "$item" >> "$TAR_LIST"
+     fi
+--- verify-fpk.sh diff (before -> after) ---
+--- dist/fpk-before/verify-fpk.sh	2026-05-25 09:44:59
++++ verify-fpk.sh	2026-05-25 10:11:07
+@@ -9,21 +9,19 @@
+ 
+ TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/livemotion-verify.XXXXXX")
+ LIST_FILE="$TMP_DIR/list.txt"
++mkdir -p "$TMP_DIR/root"
+ 
+ if tar -tzf "$PACKAGE" > "$LIST_FILE" 2>/dev/null; then
+     FORMAT="tar.gz"
+-    mkdir -p "$TMP_DIR/root"
+     tar -xzf "$PACKAGE" -C "$TMP_DIR/root"
+ elif command -v unzip >/dev/null 2>&1 && unzip -Z1 "$PACKAGE" > "$LIST_FILE" 2>/dev/null; then
+     FORMAT="zip"
+-    mkdir -p "$TMP_DIR/root"
+     unzip -q "$PACKAGE" -d "$TMP_DIR/root"
+ else
+     fail "Package is neither readable tar.gz nor zip: $PACKAGE"
+ fi
+ 
+ ROOT="$TMP_DIR/root"
+-[ -d "$ROOT" ] || fail "Extraction root missing"
+ pass "Readable package format: $FORMAT"
+ 
+ if grep -Eq '(^|/)__MACOSX(/|$)|(^|/)\.DS_Store$|(^|/)\._' "$LIST_FILE"; then
+@@ -32,10 +30,20 @@
+ pass "No macOS metadata files"
+ 
+ if grep -Eq '(^|/)fpk/' "$LIST_FILE"; then
+-    fail "Package contains fpk/ directory; package root must directly contain manifest/cmd/config/ui/docker"
++    fail "Package contains fpk/ directory; package root must directly contain manifest/cmd/config/ui/app.tgz"
+ fi
+ pass "No nested fpk/ directory"
+ 
++if grep -Eq '^manifest\.json$|/manifest\.json$' "$LIST_FILE"; then
++    fail "Package contains manifest.json, but downloaded installable fnOS samples do not"
++fi
++pass "No manifest.json in package root"
++
++if grep -Eq '^docker/|/docker/' "$LIST_FILE"; then
++    fail "Package root contains docker/. Installable Docker FPK sample places docker/ inside app.tgz"
++fi
++pass "No docker/ at package root"
++
+ require_file() {
+     [ -f "$ROOT/$1" ] || fail "Missing required file: $1"
+     pass "Found file: $1"
+@@ -47,7 +55,6 @@
+ }
+ 
+ require_file manifest
+-require_file manifest.json
+ require_file app.tgz
+ require_file ICON.PNG
+ require_file ICON_256.PNG
+@@ -55,42 +62,40 @@
+ require_dir cmd
+ require_dir config
+ require_dir ui
+-require_dir docker
+ require_file cmd/main
++require_file cmd/common
++require_file cmd/installer
+ require_file cmd/install_init
+ require_file cmd/install_callback
+ require_file cmd/uninstall_init
+ require_file cmd/uninstall_callback
+ require_file cmd/upgrade_init
+ require_file cmd/upgrade_callback
++require_file cmd/config_init
++require_file cmd/config_callback
+ require_file cmd/service-setup
+ require_file config/privilege
+ require_file config/resource
+ require_file ui/config
+ require_file ui/images/64.png
+-require_file docker/docker-compose.yml
+-require_file docker/Dockerfile
+-require_file docker/requirements.txt
+-require_dir docker/src/livephoto_worker
++require_file ui/images/256.png
+ 
+-for script in main install_init install_callback uninstall_init uninstall_callback upgrade_init upgrade_callback service-setup; do
++for script in main common installer install_init install_callback uninstall_init uninstall_callback upgrade_init upgrade_callback config_init config_callback service-setup; do
+     [ -x "$ROOT/cmd/$script" ] || fail "cmd/$script is not executable"
+ done
+ pass "Lifecycle scripts are executable"
+ 
+-python3 - "$ROOT/manifest" "$ROOT/manifest.json" "$ROOT/ICON.PNG" "$ROOT/ICON_256.PNG" <<'PY'
++python3 - "$ROOT/manifest" "$ROOT/ICON.PNG" "$ROOT/ICON_256.PNG" <<'PY'
+ from __future__ import annotations
+ 
+-import json
+ import re
+ import struct
+ import sys
+ from pathlib import Path
+ 
+ manifest_path = Path(sys.argv[1])
+-manifest_json_path = Path(sys.argv[2])
+-icon_64 = Path(sys.argv[3])
+-icon_256 = Path(sys.argv[4])
++icon_64 = Path(sys.argv[2])
++icon_256 = Path(sys.argv[3])
+ 
+ fields: dict[str, str] = {}
+ for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+@@ -109,6 +114,7 @@
+     "desktop_uidir": "ui",
+     "desktop_applaunchname": "livemotion.Application",
+     "service_port": "8011",
++    "checkport": "false",
+     "source": "thirdparty",
+ }
+ for key, expected in required.items():
+@@ -124,11 +130,8 @@
+ if not re.fullmatch(r"[0-9a-f]{32}", checksum):
+     raise SystemExit("manifest checksum must be a 32-char lowercase md5")
+ 
+-manifest_json = json.loads(manifest_json_path.read_text(encoding="utf-8"))
+-if manifest_json.get("appname") != "livemotion":
+-    raise SystemExit("manifest.json appname mismatch")
+-if manifest_json.get("service_port") != 8011:
+-    raise SystemExit("manifest.json service_port mismatch")
++if fields.get("fpk_version") != "0.1.0-r1":
++    raise SystemExit("manifest fpk_version mismatch")
+ 
+ def png_size(path: Path) -> tuple[int, int]:
+     data = path.read_bytes()
+@@ -141,28 +144,45 @@
+ if png_size(icon_256) != (256, 256):
+     raise SystemExit("ICON_256.PNG must be 256x256 PNG")
+ PY
+-pass "manifest, manifest.json, and icons validated"
++pass "manifest and icons validated"
+ 
+-if ! grep -q '/vol2/photos:/photos' "$ROOT/docker/docker-compose.yml"; then
+-    fail "docker-compose.yml missing /vol2/photos:/photos"
+-fi
+-if ! grep -q '/vol1/docker/livephoto-worker/config:/config' "$ROOT/docker/docker-compose.yml"; then
+-    fail "docker-compose.yml missing /vol1/docker/livephoto-worker/config:/config"
+-fi
+-if ! grep -q '\${TRIM_SERVICE_PORT:-8011}:8011' "$ROOT/docker/docker-compose.yml"; then
+-    fail "docker-compose.yml missing 8011 port mapping"
+-fi
+-pass "docker-compose.yml default mounts and port validated"
+-
+ APP_LIST="$TMP_DIR/app-list.txt"
++mkdir -p "$TMP_DIR/app"
+ tar -tzf "$ROOT/app.tgz" > "$APP_LIST" 2>/dev/null || fail "app.tgz is not readable tar.gz"
++tar -xzf "$ROOT/app.tgz" -C "$TMP_DIR/app"
+ if grep -Eq '(^|/)__MACOSX(/|$)|(^|/)\.DS_Store$|(^|/)\._' "$APP_LIST"; then
+     fail "app.tgz contains macOS metadata"
+ fi
+-grep -q '^docker/docker-compose.yml$' "$APP_LIST" || fail "app.tgz missing docker/docker-compose.yml"
+-grep -q '^docker/Dockerfile$' "$APP_LIST" || fail "app.tgz missing docker/Dockerfile"
+-grep -q '^docker/src/livephoto_worker/web.py$' "$APP_LIST" || fail "app.tgz missing worker source"
+-pass "app.tgz payload validated"
++[ -f "$TMP_DIR/app/docker/docker-compose.yaml" ] || fail "app.tgz missing docker/docker-compose.yaml"
++if [ -e "$TMP_DIR/app/docker/Dockerfile" ]; then
++    fail "app.tgz must not contain docker/Dockerfile in prebuilt-image mode"
++fi
++if [ -e "$TMP_DIR/app/docker/requirements.txt" ]; then
++    fail "app.tgz must not contain docker/requirements.txt in prebuilt-image mode"
++fi
++if [ -e "$TMP_DIR/app/docker/src" ]; then
++    fail "app.tgz must not contain source code in prebuilt-image mode"
++fi
++[ -f "$TMP_DIR/app/ui/config" ] || fail "app.tgz missing ui/config"
++[ -f "$TMP_DIR/app/ui/images/64.png" ] || fail "app.tgz missing ui/images/64.png"
++[ -f "$TMP_DIR/app/ui/images/256.png" ] || fail "app.tgz missing ui/images/256.png"
+ 
++if ! grep -q '/vol2/photos:/photos' "$TMP_DIR/app/docker/docker-compose.yaml"; then
++    fail "docker-compose.yaml missing /vol2/photos:/photos"
++fi
++if ! grep -q '/vol1/docker/livephoto-worker/config:/config' "$TMP_DIR/app/docker/docker-compose.yaml"; then
++    fail "docker-compose.yaml missing /vol1/docker/livephoto-worker/config:/config"
++fi
++if ! grep -q '8011:8011' "$TMP_DIR/app/docker/docker-compose.yaml"; then
++    fail "docker-compose.yaml missing 8011:8011 port mapping"
++fi
++if grep -q 'build:' "$TMP_DIR/app/docker/docker-compose.yaml"; then
++    fail "docker-compose.yaml must not contain build: in prebuilt-image mode"
++fi
++if ! grep -q 'image: ghcr.io/dttxorg/livemotion:0.1.0' "$TMP_DIR/app/docker/docker-compose.yaml"; then
++    fail "docker-compose.yaml missing prebuilt image ghcr.io/dttxorg/livemotion:0.1.0"
++fi
++pass "app.tgz prebuilt-image docker and ui payload validated"
++
+ printf '[OK] Verification complete: %s\n' "$PACKAGE"
+ printf '[INFO] Extraction directory kept for inspection: %s\n' "$TMP_DIR"

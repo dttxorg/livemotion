@@ -1,0 +1,16 @@
+appname         = livemotion
+version         = 0.1.0
+display_name    = LiveMotion
+platform        = x86
+maintainer      = LiveMotion Contributors
+maintainer_url  = https://github.com
+distributor     = local
+distributor_url = https://github.com
+desktop_uidir   = ui
+desktop_applaunchname = livemotion.Application
+service_port    = 8011
+checkport       = false
+desc            = Live Photo 转 Google Motion Photo 的 Web 配置 Docker Worker。
+source          = thirdparty
+checksum        = 
+fpk_version     = 0.1.0-r1

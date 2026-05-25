@@ -1,0 +1,155 @@
+#!/bin/bash
+
+MKDIR="/bin/mkdir -p"
+TEE="/usr/bin/tee -a"
+TAR="/bin/tar"
+
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    echo "ERROR: TRIM_PKGVAR 未设置，无法确定数据存储路径" >&2
+    exit 1
+fi
+case "${TRIM_PKGVAR}" in
+    /vol*) ;;
+    /usr/local/apps/@appdata/*) ;;
+    *) echo "ERROR: TRIM_PKGVAR=${TRIM_PKGVAR} 不是有效的应用数据路径，拒绝继续" >&2; exit 1 ;;
+esac
+/bin/mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
+
+INST_ETC="/var/apps/${TRIM_APPNAME}/etc"
+INST_VARIABLES="${INST_ETC}/installer-variables"
+INST_LOG="/var/log/apps/${TRIM_APPNAME}.log"
+FWPORTS_FILE="/var/apps/${TRIM_APPNAME}/etc/${TRIM_APPNAME}.sc"
+SHARE_PATH="/var/apps/${TRIM_APPNAME}/shares/${TRIM_APPNAME}"
+LOG_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.log"
+PID_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.pid"
+DNAME="${TRIM_APPNAME}"
+DOCKER_NAME=""
+
+error_exit() {
+    local msg="$1"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        echo "$msg" > "${TRIM_TEMP_LOGFILE}"
+    fi
+    echo "ERROR: $msg" >&2
+    exit 1
+}
+
+install_log() {
+    local msg="$*"
+    if [ -z "$msg" ]; then
+        while IFS= read -r line; do install_log "$line"; done
+    else
+        echo -e "$(date +'%Y/%m/%d %H:%M:%S')\t${msg}" 1>&2
+    fi
+}
+
+call_func() {
+    FUNC=$1
+    LOG=$2
+    if type "${FUNC}" 2>/dev/null | grep -q 'function' 2>/dev/null; then
+        if [ -n "${LOG}" ]; then
+            install_log "Begin ${FUNC}"
+            eval "${FUNC}" 2>&1 | ${LOG}
+            install_log "End ${FUNC}"
+        else
+            eval "${FUNC}"
+        fi
+    fi
+}
+
+load_variables_from_file() {
+    if [ -n "$1" ] && [ -r "$1" ]; then
+        while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            key="$(echo "$line" | cut --fields=1 --delimiter==)"
+            value="$(echo "$line" | cut --fields=2- --delimiter==)"
+            export "${key}=${value}"
+        done < "$1"
+    fi
+}
+
+initialize_variables() { :; }
+validate_preinst() { :; }
+service_preinst() { :; }
+service_postinst() { :; }
+service_preuninst() { :; }
+service_postuninst() { :; }
+validate_preupgrade() { :; }
+service_preupgrade() { :; }
+service_save() { :; }
+service_restore() { :; }
+service_postupgrade() { :; }
+service_preconfig() { :; }
+service_postconfig() { :; }
+
+log_step() {
+    install_log "===> Step $1. STATUS=${TRIM_APP_STATUS:-} USER=${USER:-} GROUP=${GROUP:-} SHARE_PATH=${SHARE_PATH:-}"
+}
+
+stop_daemon() { :; }
+
+daemon_status() {
+    FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
+    if [ -f "$FILE_PATH" ]; then
+        DOCKER_NAME=$(grep "container_name" "$FILE_PATH" | awk -F ':' '{print $2}' | xargs)
+    fi
+    if [ -n "$DOCKER_NAME" ]; then
+        docker inspect "$DOCKER_NAME" | grep -q '"Status": "running",'
+        return $?
+    fi
+    return 1
+}
+
+install_init() {
+    log_step "install_init"
+    call_func "validate_preinst" install_log
+    call_func "service_preinst" install_log
+    exit 0
+}
+
+install_callback() {
+    log_step "install_callback"
+    call_func "service_postinst" install_log
+    exit 0
+}
+
+uninstall_init() {
+    log_step "uninstall_init"
+    stop_daemon
+    call_func "service_preuninst" install_log
+    exit 0
+}
+
+uninstall_callback() {
+    log_step "uninstall_callback"
+    call_func "service_postuninst" install_log
+    exit 0
+}
+
+upgrade_init() {
+    log_step "upgrade_init"
+    call_func "validate_preupgrade" install_log
+    stop_daemon
+    call_func "service_preupgrade" install_log
+    call_func "service_save" install_log
+    exit 0
+}
+
+upgrade_callback() {
+    log_step "upgrade_callback"
+    call_func "service_restore" install_log
+    call_func "service_postupgrade" install_log
+    exit 0
+}
+
+config_init() {
+    log_step "config_init"
+    call_func "service_preconfig" install_log
+    exit 0
+}
+
+config_callback() {
+    log_step "config_callback"
+    call_func "service_postconfig" install_log
+    exit 0
+}

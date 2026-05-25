@@ -1,0 +1,14 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+input/
+output/
+archive/
+failed/
+data/
+dist/
+fpk/
+tests/

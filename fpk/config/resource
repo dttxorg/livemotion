@@ -1,0 +1,25 @@
+{
+    "port-config": {
+        "protocol-file": "LiveMotion.sc"
+    },
+    "data-share": {
+        "shares": [
+            {
+                "name": "LiveMotion",
+                "permission": {
+                    "rw": [
+                        "livemotion"
+                    ]
+                }
+            }
+        ]
+    },
+    "docker-project": {
+        "projects": [
+            {
+                "name": "livemotion",
+                "path": "docker"
+            }
+        ]
+    }
+}

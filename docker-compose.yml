@@ -1,0 +1,19 @@
+services:
+  livephoto-worker:
+    build:
+      context: .
+      args:
+        MOTIONPHOTO2_VERSION: v2.7.7
+    image: livephoto-worker:latest
+    container_name: livephoto-worker
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: /config/config.json
+      DB_PATH: /config/livephoto-worker.sqlite3
+      LOG_LEVEL: INFO
+      WEB_PORT: "8011"
+    ports:
+      - "8011:8011"
+    volumes:
+      - /vol2/photos:/photos
+      - /vol1/docker/livephoto-worker/config:/config
