@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Union
 
 from .file_utils import quick_media_item_state, quick_pair_state
@@ -23,7 +23,8 @@ class PendingWork:
     kind: WorkKind
     item: WorkItem
     quick_state: str
-    stable_since: float
+    first_seen_at: float
+    warned_waiting_too_long: bool = False
 
 
 @dataclass
@@ -62,7 +63,7 @@ class LivePhotoWorker:
         self.pending: dict[str, PendingWork] = {}
         self.completed_states: dict[str, str] = {}
         self.stop_event = threading.Event()
-        self.scan_lock = threading.Lock()
+        self.scan_lock = threading.RLock()
         self.scan_stats = WorkerScanStats()
 
     def stop(self) -> None:
@@ -94,7 +95,33 @@ class LivePhotoWorker:
         with self.scan_lock:
             return self._scan_once_unlocked(now=now)
 
-    def _scan_once_unlocked(self, now: float | None = None) -> int:
+    def force_scan_once(self, now: float | None = None) -> int:
+        with self.scan_lock:
+            return self._scan_once_unlocked(now=now, force=True)
+
+    def pending_status(self, now: float | None = None) -> dict[str, float | int | None]:
+        now = time.time() if now is None else now
+        with self.scan_lock:
+            pending = list(self.pending.values())
+        if not pending:
+            return {
+                "waiting_count": 0,
+                "waiting_live_pairs": 0,
+                "earliest_first_seen_at": None,
+                "next_process_at": None,
+                "oldest_wait_seconds": 0,
+            }
+        earliest = min(item.first_seen_at for item in pending)
+        next_process_at = min(item.first_seen_at + self.settings.stable_seconds for item in pending)
+        return {
+            "waiting_count": len(pending),
+            "waiting_live_pairs": sum(1 for item in pending if item.kind == "pair"),
+            "earliest_first_seen_at": earliest,
+            "next_process_at": next_process_at,
+            "oldest_wait_seconds": max(0, now - earliest),
+        }
+
+    def _scan_once_unlocked(self, now: float | None = None, *, force: bool = False) -> int:
         now = time.time() if now is None else now
         logger.info("Scanning input folder as full media library: %s", self.settings.input_dir)
         scan_result = scan_media(
@@ -113,6 +140,11 @@ class LivePhotoWorker:
         copied_videos = 0
         skipped = 0
         failed = 0
+        detected_live = len(scan_result.pairs)
+        detected_photos = sum(1 for item in scan_result.media_items if item.media_type == "photo")
+        detected_videos = sum(1 for item in scan_result.media_items if item.media_type == "video")
+        live_info_count = 0
+        suppressed_live_info = 0
 
         for pair in scan_result.pairs:
             key = self._pending_key("pair", pair)
@@ -125,7 +157,14 @@ class LivePhotoWorker:
             if self.completed_states.get(key) == current_state:
                 continue
 
-            if not self._is_stable(key, "pair", pair, current_state, now):
+            is_new_or_changed = self._is_new_or_changed(key, current_state)
+            log_live_info = is_new_or_changed and live_info_count < 10
+            if is_new_or_changed and log_live_info:
+                live_info_count += 1
+            elif is_new_or_changed:
+                suppressed_live_info += 1
+
+            if not self._is_stable(key, "pair", pair, current_state, now, force=force, log_live_info=log_live_info):
                 continue
 
             self.pending.pop(key, None)
@@ -153,7 +192,7 @@ class LivePhotoWorker:
             if self.completed_states.get(key) == current_state:
                 continue
 
-            if not self._is_stable(key, "media", item, current_state, now):
+            if not self._is_stable(key, "media", item, current_state, now, force=force):
                 continue
 
             self.pending.pop(key, None)
@@ -178,39 +217,90 @@ class LivePhotoWorker:
             logger.debug("Dropping stale pending work: %s", key)
             self.pending.pop(key, None)
 
+        if suppressed_live_info:
+            logger.info("Detected %s additional Live Photo candidates; showing only first 10", suppressed_live_info)
+
+        pending_status = self.pending_status(now=now)
+        waiting = int(pending_status["waiting_count"] or 0)
         logger.info(
-            "Scan finished: merged_live=%s copied_photos=%s copied_videos=%s skipped=%s failed=%s",
+            "Detected candidates: detected_live_pairs=%s detected_normal_photos=%s detected_normal_videos=%s waiting_for_stable=%s",
+            detected_live,
+            detected_photos,
+            detected_videos,
+            waiting,
+        )
+        logger.info(
+            "Scan finished:\n"
+            "detected_live=%s detected_photos=%s detected_videos=%s\n"
+            "processed_live=%s copied_photos=%s copied_videos=%s\n"
+            "waiting=%s skipped=%s failed=%s",
+            detected_live,
+            detected_photos,
+            detected_videos,
             merged_live,
             copied_photos,
             copied_videos,
+            waiting,
             skipped,
             failed,
         )
         return processed_count
 
-    def _is_stable(self, key: str, kind: WorkKind, item: WorkItem, current_state: str, now: float) -> bool:
+    def _is_stable(
+        self,
+        key: str,
+        kind: WorkKind,
+        item: WorkItem,
+        current_state: str,
+        now: float,
+        *,
+        force: bool,
+        log_live_info: bool = False,
+    ) -> bool:
         pending = self.pending.get(key)
         label = item.key
-        if pending is None or pending.quick_state != current_state:
+        if pending is None:
             self.pending[key] = PendingWork(
                 kind=kind,
                 item=item,
                 quick_state=current_state,
-                stable_since=now,
+                first_seen_at=now,
             )
-            logger.info(
-                "Detected candidate %s %s; waiting %.1fs for transfer to settle",
-                kind,
-                label,
-                self.settings.stable_seconds,
-            )
-            return False
+            self._log_candidate_detected(kind, label, log_live_info=log_live_info)
+            return force
 
-        age = now - pending.stable_since
+        if pending.quick_state != current_state:
+            self.pending[key] = PendingWork(
+                kind=kind,
+                item=item,
+                quick_state=current_state,
+                first_seen_at=now,
+            )
+            logger.debug("Candidate changed; reset first_seen_at for %s %s", kind, label)
+            return force
+
+        if force:
+            logger.debug("Force scan is processing candidate without waiting: %s %s", kind, label)
+            return True
+
+        age = now - pending.first_seen_at
+        if age >= 300 and not pending.warned_waiting_too_long:
+            pending.warned_waiting_too_long = True
+            logger.warning("Candidate has been waiting too long: %s elapsed=%.1fs", label, age)
         if age < self.settings.stable_seconds:
             logger.debug("%s %s stable for %.1fs; waiting", kind, label, age)
             return False
         return True
+
+    def _is_new_or_changed(self, key: str, current_state: str) -> bool:
+        pending = self.pending.get(key)
+        return pending is None or pending.quick_state != current_state
+
+    def _log_candidate_detected(self, kind: WorkKind, label: str, *, log_live_info: bool) -> None:
+        if kind == "pair" and log_live_info:
+            logger.info("Detected Live Photo candidate %s; waiting %.1fs for transfer to settle", label, self.settings.stable_seconds)
+            return
+        logger.debug("Detected candidate %s %s; waiting %.1fs for transfer to settle", kind, label, self.settings.stable_seconds)
 
     def _pending_key(self, kind: WorkKind, item: WorkItem) -> str:
         return f"{kind}:{item.key}"

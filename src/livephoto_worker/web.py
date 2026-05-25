@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from flask import Flask, Response, redirect, render_template_string, request, url_for
@@ -209,9 +210,12 @@ PAGE_TEMPLATE = """
         <form method="post" action="{{ url_for('scan_now') }}" class="d-inline">
           <button type="submit" class="btn btn-primary btn-lg rounded-3">⚡ 立即扫描</button>
         </form>
-        <a class="btn btn-outline-secondary btn-lg rounded-3 ms-2" href="{{ url_for('logs_page') }}">查看日志</a>
+        <form method="post" action="{{ url_for('force_scan_now') }}" class="d-inline">
+          <button type="submit" class="btn btn-warning btn-lg rounded-3 ms-2">🚀 强制扫描</button>
+        </form>
       </div>
     </div>
+    <div class="alert alert-info border-0 rounded-4 mt-4 mb-0">首次扫描大目录时，建议使用强制扫描。</div>
   </section>
 
   <section class="section-card p-4 mb-4">
@@ -223,7 +227,11 @@ PAGE_TEMPLATE = """
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已处理文件数</div><div class="metric-value">{{ stats.processed_count }}</div><div class="metric-small">已成功去重的文件对</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败文件数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">需要人工检查</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">最近处理时间</div><div class="metric-value fs-6 mt-2">{{ stats.latest_job_at or '暂无记录' }}</div><div class="metric-small">任务记录更新时间</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前监听目录</div><div class="metric-value fs-6 mt-2 text-path">{{ settings.input_dir }}</div><div class="metric-small">当前队列数量：{{ queue_count }}</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前监听目录</div><div class="metric-value fs-6 mt-2 text-path">{{ settings.input_dir }}</div><div class="metric-small">Pixel 只同步输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">等待稳定的文件数</div><div class="metric-value">{{ pending_status.waiting_count }}</div><div class="metric-small">当前等待队列</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">等待稳定的 Live Photo 数</div><div class="metric-value">{{ pending_status.waiting_live_pairs }}</div><div class="metric-small">等待稳定的文件对</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前最早等待时间</div><div class="metric-value fs-6 mt-2">{{ pending_status.earliest_first_seen_text }}</div><div class="metric-small">最早进入等待队列</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">下次预计处理时间</div><div class="metric-value fs-6 mt-2">{{ pending_status.next_process_text }}</div><div class="metric-small">可用强制扫描跳过等待</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描目录数</div><div class="metric-value">{{ scan_stats.scanned_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描文件数</div><div class="metric-value">{{ scan_stats.scanned_files }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">跳过目录数</div><div class="metric-value">{{ scan_stats.skipped_dirs }}</div><div class="metric-small">已排除输出/归档/特殊目录</div></div></div>
@@ -282,13 +290,17 @@ PAGE_TEMPLATE = """
         <h1 class="h3 fw-bold mb-1">📊 查看统计</h1>
         <p class="text-secondary mb-0">转换结果、今日任务与最近处理文件。</p>
       </div>
-      <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary rounded-3">立即扫描</button></form>
+      <div class="d-flex gap-2">
+        <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary rounded-3">立即扫描</button></form>
+        <form method="post" action="{{ url_for('force_scan_now') }}"><button type="submit" class="btn btn-warning rounded-3">强制扫描并忽略稳定等待</button></form>
+      </div>
     </div>
     <div class="row g-3">
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已合并 Live Photo 数量</div><div class="metric-value text-success">{{ stats.success_count }}</div><div class="metric-small">成功合成 Motion Photo</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败数量</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">失败文件会移动到失败目录</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">今日处理数量</div><div class="metric-value">{{ stats.today_count }}</div><div class="metric-small">按 NAS 本地日期统计</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前队列数量</div><div class="metric-value">{{ queue_count }}</div><div class="metric-small">等待稳定窗口的文件对</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">等待稳定的文件数</div><div class="metric-value">{{ pending_status.waiting_count }}</div><div class="metric-small">Live Photo 和普通媒体</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">等待稳定的 Live Photo 数</div><div class="metric-value">{{ pending_status.waiting_live_pairs }}</div><div class="metric-small">等待稳定的文件对</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描目录数</div><div class="metric-value">{{ scan_stats.scanned_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描文件数</div><div class="metric-value">{{ scan_stats.scanned_files }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">跳过目录数</div><div class="metric-value">{{ scan_stats.skipped_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
@@ -510,6 +522,29 @@ def _queue_count(worker: LivePhotoWorker) -> int:
         return len(pending)
 
 
+def _format_timestamp(value: float | int | None) -> str:
+    if value is None:
+        return "暂无等待"
+    return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _pending_status(worker: LivePhotoWorker) -> dict[str, str | int | float | None]:
+    status_method = getattr(worker, "pending_status", None)
+    if callable(status_method):
+        status = dict(status_method())
+    else:
+        status = {
+            "waiting_count": _queue_count(worker),
+            "waiting_live_pairs": 0,
+            "earliest_first_seen_at": None,
+            "next_process_at": None,
+            "oldest_wait_seconds": 0,
+        }
+    status["earliest_first_seen_text"] = _format_timestamp(status.get("earliest_first_seen_at"))  # type: ignore[arg-type]
+    status["next_process_text"] = _format_timestamp(status.get("next_process_at"))  # type: ignore[arg-type]
+    return status
+
+
 def _scan_stats(worker: LivePhotoWorker) -> dict[str, int]:
     stats = getattr(worker, "scan_stats", None)
     if stats is None:
@@ -576,6 +611,7 @@ def create_app(
             jobs_table=jobs_table,
             logs_panel=logs_panel,
             queue_count=_queue_count(worker),
+            pending_status=_pending_status(worker),
             scan_stats=_scan_stats(worker),
             app_version=APP_VERSION,
             github_url=GITHUB_URL,
@@ -618,6 +654,15 @@ def create_app(
     def scan_now():  # type: ignore[no-untyped-def]
         processed_count = worker.scan_once()
         return redirect(url_for("index", message=f"已立即扫描，本轮处理 {processed_count} 对文件"))
+
+    @app.post("/scan/force")
+    def force_scan_now():  # type: ignore[no-untyped-def]
+        force_scan = getattr(worker, "force_scan_once", None)
+        if callable(force_scan):
+            processed_count = force_scan()
+        else:
+            processed_count = worker.scan_once()
+        return redirect(url_for("index", message=f"已强制扫描并忽略稳定等待，本轮处理 {processed_count} 个候选"))
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

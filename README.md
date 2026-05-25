@@ -66,6 +66,7 @@ http://NAS_IP:8011
 
 - 保存配置
 - 立即扫描一次
+- 强制扫描并忽略稳定等待
 - 查看最近日志
 - 查看处理统计
 
@@ -90,6 +91,7 @@ http://NAS_IP:8011
 - `recursive_scan=true` 时递归扫描输入目录的多层子目录。
 - `preserve_directory_structure=true` 时，输出、归档、失败目录会保留相对路径。
 - `skip_dir_names` 每行一个目录名；系统会始终跳过 `.stfolder`、`@eaDir`、`#recycle`、`.Trash`、`.AppleDouble`、`__MACOSX`，并自动排除位于输入目录内的 output/archive/failed。
+- 首次扫描大目录时，建议使用“强制扫描并忽略稳定等待”；日常增量同步建议使用默认稳定等待，避免处理未传输完成的文件。
 - 失败文件仍会移动到 `failed_dir`，避免反复失败重试。
 
 ## Docker Compose 部署

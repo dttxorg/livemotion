@@ -33,6 +33,7 @@ class FakeWebWorker:
     def __init__(self) -> None:
         self.cleared = False
         self.scans = 0
+        self.force_scans = 0
 
     def clear_pending(self) -> None:
         self.cleared = True
@@ -40,6 +41,19 @@ class FakeWebWorker:
     def scan_once(self) -> int:
         self.scans += 1
         return 7
+
+    def force_scan_once(self) -> int:
+        self.force_scans += 1
+        return 9
+
+    def pending_status(self) -> dict[str, float | int | None]:
+        return {
+            "waiting_count": 3,
+            "waiting_live_pairs": 1,
+            "earliest_first_seen_at": 100,
+            "next_process_at": 130,
+            "oldest_wait_seconds": 20,
+        }
 
 
 def write_file(path: Path, content: bytes) -> None:
@@ -306,7 +320,70 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             log_text = "\n".join(captured.output)
             self.assertIn("Scanning input folder as full media library", log_text)
-            self.assertIn("merged_live=0 copied_photos=1 copied_videos=0 skipped=0 failed=0", log_text)
+            self.assertIn("detected_live_pairs=0 detected_normal_photos=1 detected_normal_videos=0 waiting_for_stable=0", log_text)
+            self.assertIn("Scan finished:", log_text)
+            self.assertIn("processed_live=0 copied_photos=1 copied_videos=0", log_text)
+            self.assertIn("waiting=0 skipped=0 failed=0", log_text)
+            self.assertNotIn("Detected candidate media", log_text)
+            self.assertNotIn("solo.JPG; waiting", log_text)
+            store.close()
+
+    def test_waiting_too_long_warns_once(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_file(root / "IMG_0001.JPG", b"photo")
+            settings = test_settings(root, input_dir=root, output_dir=root / "out", stable_seconds=600)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            worker.scan_once(now=0)
+            with self.assertLogs("livephoto_worker.worker", level="WARNING") as captured:
+                worker.scan_once(now=301)
+
+            self.assertIn("Candidate has been waiting too long", "\n".join(captured.output))
+            store.close()
+
+    def test_force_scan_ignores_stable_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            write_file(input_dir / "album" / "solo.JPG", b"photo")
+            settings = test_settings(root, input_dir=input_dir, output_dir=output_dir, stable_seconds=30)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            processed = worker.force_scan_once(now=100)
+
+            self.assertEqual(processed, 1)
+            self.assertTrue((output_dir / "album" / "solo.JPG").is_file())
+            self.assertEqual(worker.pending_status(now=100)["waiting_count"], 0)
+            store.close()
+
+    def test_live_photo_candidate_info_is_limited_to_first_ten(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(12):
+                write_file(root / f"IMG_{index:04d}.HEIC", b"image")
+                write_file(root / f"IMG_{index:04d}.MOV", b"video")
+            settings = test_settings(root, input_dir=root, output_dir=root / "out", stable_seconds=30)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            with self.assertLogs("livephoto_worker.worker", level="INFO") as captured:
+                worker.scan_once(now=100)
+
+            log_text = "\n".join(captured.output)
+            self.assertEqual(log_text.count("Detected Live Photo candidate"), 10)
+            self.assertIn("Detected 2 additional Live Photo candidates; showing only first 10", log_text)
             store.close()
 
     def test_worker_waits_until_pair_state_is_stable_for_settle_window(self) -> None:
@@ -331,6 +408,32 @@ class LivePhotoWorkerTests(unittest.TestCase):
             worker.scan_once(now=111)
             self.assertEqual(len(processor.processed), 1)
             self.assertEqual(processor.processed[0].stem, "IMG_0001")
+
+    def test_worker_resets_first_seen_when_candidate_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "IMG_0001.HEIC"
+            video = root / "IMG_0001.MOV"
+            write_file(image, b"image")
+            write_file(video, b"video")
+            settings = test_settings(
+                root,
+                input_dir=root,
+                output_dir=root / "out",
+                stable_seconds=10,
+                poll_interval=1,
+            )
+            processor = RecordingProcessor()
+            worker = LivePhotoWorker(settings=settings, processor=processor)  # type: ignore[arg-type]
+
+            worker.scan_once(now=100)
+            write_file(video, b"video-changed")
+            worker.scan_once(now=105)
+            worker.scan_once(now=114)
+            self.assertEqual(processor.processed, [])
+
+            worker.scan_once(now=116)
+            self.assertEqual(len(processor.processed), 1)
 
     def test_processor_success_runs_motionphoto2_moves_originals_and_records_db(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -505,6 +608,11 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("失败文件数".encode(), response.data)
             self.assertIn("最近处理时间".encode(), response.data)
             self.assertIn("当前监听目录".encode(), response.data)
+            self.assertIn("等待稳定的文件数".encode(), response.data)
+            self.assertIn("等待稳定的 Live Photo 数".encode(), response.data)
+            self.assertIn("当前最早等待时间".encode(), response.data)
+            self.assertIn("下次预计处理时间".encode(), response.data)
+            self.assertIn("首次扫描大目录时，建议使用强制扫描。".encode(), response.data)
             self.assertIn("递归扫描".encode(), response.data)
             self.assertIn("保留原目录结构".encode(), response.data)
             self.assertIn("跳过目录列表".encode(), response.data)
@@ -535,6 +643,10 @@ class LivePhotoWorkerTests(unittest.TestCase):
             response = client.post("/scan")
             self.assertEqual(response.status_code, 302)
             self.assertEqual(fake_worker.scans, 1)
+
+            response = client.post("/scan/force")
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(fake_worker.force_scans, 1)
             store.close()
 
     @unittest.skipIf(create_app is None, "Flask is not installed")
@@ -586,7 +698,8 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("失败数量".encode(), stats_response.data)
             self.assertIn("今日处理数量".encode(), stats_response.data)
             self.assertIn("最近处理文件".encode(), stats_response.data)
-            self.assertIn("当前队列数量".encode(), stats_response.data)
+            self.assertIn("等待稳定的文件数".encode(), stats_response.data)
+            self.assertIn("等待稳定的 Live Photo 数".encode(), stats_response.data)
             self.assertIn("扫描目录数".encode(), stats_response.data)
             self.assertIn("扫描文件数".encode(), stats_response.data)
             self.assertIn("跳过目录数".encode(), stats_response.data)
