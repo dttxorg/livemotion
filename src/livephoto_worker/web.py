@@ -182,6 +182,7 @@ PAGE_TEMPLATE = """
         <li class="nav-item"><a class="nav-link {% if page == 'dashboard' %}active{% endif %}" href="{{ url_for('index') }}">控制台</a></li>
         <li class="nav-item"><a class="nav-link {% if page == 'stats' %}active{% endif %}" href="{{ url_for('stats_page') }}">查看统计</a></li>
         <li class="nav-item"><a class="nav-link {% if page == 'logs' %}active{% endif %}" href="{{ url_for('logs_page') }}">查看日志</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'debug_candidates' %}active{% endif %}" href="{{ url_for('debug_candidates_page') }}">候选调试</a></li>
         <li class="nav-item"><a class="nav-link {% if page == 'about' %}active{% endif %}" href="{{ url_for('about_page') }}">关于</a></li>
       </ul>
     </div>
@@ -322,6 +323,41 @@ PAGE_TEMPLATE = """
     {% endif %}
   </section>
   <section class="section-card p-4">{{ jobs_table|safe }}</section>
+  {% elif page == 'debug_candidates' %}
+  <section class="section-card p-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between gap-3 align-items-md-center mb-3">
+      <div>
+        <h1 class="h3 fw-bold mb-1">🧪 候选调试</h1>
+        <p class="text-secondary mb-0">查看当前等待稳定的候选队列、已等待时间和未处理原因。</p>
+      </div>
+      <div class="d-flex gap-2">
+        <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary rounded-3">立即扫描</button></form>
+        <form method="post" action="{{ url_for('force_scan_now') }}"><button type="submit" class="btn btn-warning rounded-3">强制处理</button></form>
+      </div>
+    </div>
+    {% if candidate_rows %}
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>类型</th><th>文件路径</th><th>已等待秒数</th><th>size/mtime 是否稳定</th><th>下一次可处理时间</th><th>状态原因</th><th>大小 / mtime</th></tr></thead>
+        <tbody>
+          {% for row in candidate_rows %}
+          <tr>
+            <td><span class="badge text-bg-secondary">{{ row.candidate_type }}</span></td>
+            <td class="text-path">{{ row.path }}</td>
+            <td>{{ "%.1f"|format(row.waited_seconds) }}</td>
+            <td>{% if row.is_stable %}<span class="badge text-bg-success">稳定</span>{% else %}<span class="badge text-bg-warning">变化中</span>{% endif %}</td>
+            <td>{{ row.next_process_text }}</td>
+            <td>{{ row.reason }}</td>
+            <td class="text-path small">image={{ row.image_size }}/{{ row.image_mtime }}<br>video={{ row.video_size }}/{{ row.video_mtime }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">当前没有等待稳定的候选文件</div>
+    {% endif %}
+  </section>
   {% elif page == 'about' %}
   <section class="section-card p-5 text-center">
     <div class="about-logo mb-3">▶</div>
@@ -545,6 +581,18 @@ def _pending_status(worker: LivePhotoWorker) -> dict[str, str | int | float | No
     return status
 
 
+def _candidate_rows(worker: LivePhotoWorker) -> list[dict[str, object]]:
+    rows_method = getattr(worker, "candidate_debug_rows", None)
+    if not callable(rows_method):
+        return []
+    rows = []
+    for row in rows_method():
+        copied = dict(row)
+        copied["next_process_text"] = _format_timestamp(copied.get("next_process_at"))  # type: ignore[arg-type]
+        rows.append(copied)
+    return rows
+
+
 def _scan_stats(worker: LivePhotoWorker) -> dict[str, int]:
     stats = getattr(worker, "scan_stats", None)
     if stats is None:
@@ -612,6 +660,7 @@ def create_app(
             logs_panel=logs_panel,
             queue_count=_queue_count(worker),
             pending_status=_pending_status(worker),
+            candidate_rows=_candidate_rows(worker),
             scan_stats=_scan_stats(worker),
             app_version=APP_VERSION,
             github_url=GITHUB_URL,
@@ -638,6 +687,10 @@ def create_app(
     @app.get("/about")
     def about_page() -> str:
         return render_page("about", "关于")
+
+    @app.get("/debug/candidates")
+    def debug_candidates_page() -> str:
+        return render_page("debug_candidates", "候选调试", message=request.args.get("message", ""))
 
     @app.get("/favicon.svg")
     def favicon() -> Response:

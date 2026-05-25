@@ -14,6 +14,14 @@ from .settings import Settings
 logger = logging.getLogger(__name__)
 
 
+class MotionPhoto2Error(RuntimeError):
+    def __init__(self, message: str, *, command: list[str], returncode: int | None, stderr: str):
+        super().__init__(message)
+        self.command = command
+        self.returncode = returncode
+        self.stderr = stderr
+
+
 class PairProcessor:
     def __init__(self, settings: Settings, store: ProcessingStore):
         self.settings = settings
@@ -40,7 +48,17 @@ class PairProcessor:
                 self.store.record_duplicate(pair, hashes)
                 return "skipped"
 
-            output_path = unique_path(self._destination_dir(self.settings.output_dir, pair.image_path), pair.image_path.name, marker=marker)
+            destination_dir = self._destination_dir(self.settings.output_dir, pair.image_path)
+            desired_output_path = destination_dir / pair.image_path.name
+            output_path = unique_path(destination_dir, pair.image_path.name, marker=marker)
+            if output_path != desired_output_path:
+                logger.info("Candidate output path exists: reason=output_exists existing=%s using=%s", desired_output_path, output_path)
+            logger.info(
+                "Starting MotionPhoto2 conversion: image=%s video=%s output=%s",
+                pair.image_path,
+                pair.video_path,
+                output_path,
+            )
             started_at = time.time()
             self._run_motionphoto2(pair, output_path)
 
@@ -74,7 +92,10 @@ class PairProcessor:
                 return "skipped"
 
             destination_dir = self._destination_dir(self.settings.output_dir, item.path)
+            desired_output_path = destination_dir / item.path.name
             output_path = unique_path(destination_dir, item.path.name, marker=marker)
+            if output_path != desired_output_path:
+                logger.info("Candidate output path exists: reason=output_exists existing=%s using=%s", desired_output_path, output_path)
             shutil.copy2(item.path, output_path)
             self.store.record_copied_file(item, digest, output_path)
             logger.info("Copied ordinary %s to output: %s", item.media_type, output_path)
@@ -101,19 +122,39 @@ class PairProcessor:
             command.append("--verbose")
 
         logger.info("Running MotionPhoto2 for %s -> %s", pair.stem, output_path.name)
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=self.settings.process_timeout_seconds,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=self.settings.process_timeout_seconds,
+                check=False,
+            )
+        except Exception as exc:
+            logger.exception("MotionPhoto2 invocation raised exception; command=%s", command)
+            raise MotionPhoto2Error(
+                f"MotionPhoto2 invocation failed: {exc}",
+                command=command,
+                returncode=None,
+                stderr="",
+            ) from exc
         if result.stdout:
             logger.info("MotionPhoto2 stdout for %s:\n%s", pair.stem, result.stdout.rstrip())
         if result.stderr:
             logger.warning("MotionPhoto2 stderr for %s:\n%s", pair.stem, result.stderr.rstrip())
         if result.returncode != 0:
-            raise RuntimeError(f"MotionPhoto2 exited with code {result.returncode}")
+            logger.error(
+                "MotionPhoto2 failed; command=%s returncode=%s stderr=%s",
+                command,
+                result.returncode,
+                result.stderr.rstrip(),
+            )
+            raise MotionPhoto2Error(
+                f"MotionPhoto2 exited with code {result.returncode}; stderr={result.stderr.rstrip()}",
+                command=command,
+                returncode=result.returncode,
+                stderr=result.stderr,
+            )
 
     def _resolve_output_path(self, expected_path: Path, started_at: float) -> Path | None:
         if expected_path.exists():

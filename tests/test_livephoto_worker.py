@@ -55,6 +55,22 @@ class FakeWebWorker:
             "oldest_wait_seconds": 20,
         }
 
+    def candidate_debug_rows(self) -> list[dict[str, object]]:
+        return [{
+            "candidate_type": "live_photo",
+            "path": "image=/photos/IMG_0001.HEIC video=/photos/IMG_0001.MOV",
+            "waited_seconds": 12.5,
+            "first_seen_at": 100,
+            "last_seen_at": 112.5,
+            "next_process_at": 130,
+            "is_stable": True,
+            "reason": "waiting_for_stable",
+            "image_size": 10,
+            "video_size": 20,
+            "image_mtime": 1000000,
+            "video_mtime": 2000000,
+        }]
+
 
 def write_file(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,6 +381,109 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(worker.pending_status(now=100)["waiting_count"], 0)
             store.close()
 
+    def test_first_live_photo_scan_records_waiting_candidate_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "2026" / "5" / "IMG_0056.HEIC"
+            video = root / "2026" / "5" / "IMG_0056.MOV"
+            write_file(image, b"image-bytes")
+            write_file(video, b"video-bytes")
+            settings = test_settings(root, input_dir=root, output_dir=root / "out", stable_seconds=30)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            processed = worker.scan_once(now=100)
+
+            self.assertEqual(processed, 0)
+            self.assertEqual(worker.pending_status(now=100)["waiting_count"], 1)
+            rows = worker.candidate_debug_rows(now=100)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["candidate_type"], "live_photo")
+            self.assertEqual(rows[0]["reason"], "waiting_for_stable")
+            self.assertEqual(rows[0]["image_size"], len(b"image-bytes"))
+            self.assertEqual(rows[0]["video_size"], len(b"video-bytes"))
+            self.assertIn(str(image), str(rows[0]["path"]))
+            self.assertIn(str(video), str(rows[0]["path"]))
+            store.close()
+
+    def test_force_scan_processes_live_photo_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            archive_dir = root / "archive"
+            failed_dir = root / "failed"
+            image = input_dir / "2026" / "5" / "IMG_0056.HEIC"
+            video = input_dir / "2026" / "5" / "IMG_0056.MOV"
+            write_file(image, b"image-bytes")
+            write_file(video, b"video-bytes")
+            fake_bin = create_fake_motionphoto2(root / "motionphoto2")
+            settings = test_settings(
+                root,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                archive_dir=archive_dir,
+                failed_dir=failed_dir,
+                motionphoto2_bin=str(fake_bin),
+                stable_seconds=30,
+            )
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            processed = worker.force_scan_once(now=100)
+
+            self.assertEqual(processed, 1)
+            self.assertTrue((output_dir / "2026" / "5" / "IMG_0056.HEIC").is_file())
+            self.assertEqual(store.latest_job()["status"], "success")  # type: ignore[index]
+            store.close()
+
+    def test_motionphoto2_failure_increments_failed_and_logs_details(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            failed_dir = root / "failed"
+            image = input_dir / "IMG_0056.HEIC"
+            video = input_dir / "IMG_0056.MOV"
+            write_file(image, b"image-bytes")
+            write_file(video, b"video-bytes")
+            fake_bin = create_fake_motionphoto2(root / "motionphoto2", exit_code=7, write_output=False)
+            settings = test_settings(
+                root,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                failed_dir=failed_dir,
+                motionphoto2_bin=str(fake_bin),
+                stable_seconds=0,
+            )
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings=settings, store=store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            with self.assertLogs(level="INFO") as captured:
+                worker.scan_once(now=100)
+                processed = worker.scan_once(now=101)
+
+            log_text = "\n".join(captured.output)
+            self.assertEqual(processed, 1)
+            self.assertIn("Starting MotionPhoto2 conversion: image=", log_text)
+            self.assertIn("MotionPhoto2 failed; command=", log_text)
+            self.assertIn("returncode=7", log_text)
+            self.assertIn("Traceback", log_text)
+            self.assertIn("reason=conversion_failed", log_text)
+            self.assertIn("failed=1", log_text)
+            self.assertEqual(worker.scan_stats.failed, 1)
+            latest = store.latest_job()
+            self.assertIsNotNone(latest)
+            self.assertEqual(latest["status"], "failed")
+            store.close()
+
     def test_live_photo_candidate_info_is_limited_to_first_ten(self) -> None:
         logging.disable(logging.NOTSET)
         with tempfile.TemporaryDirectory() as tmp:
@@ -647,6 +766,16 @@ class LivePhotoWorkerTests(unittest.TestCase):
             response = client.post("/scan/force")
             self.assertEqual(response.status_code, 302)
             self.assertEqual(fake_worker.force_scans, 1)
+
+            response = client.get("/debug/candidates")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("候选调试".encode(), response.data)
+            self.assertIn("文件路径".encode(), response.data)
+            self.assertIn("已等待秒数".encode(), response.data)
+            self.assertIn("size/mtime 是否稳定".encode(), response.data)
+            self.assertIn("下一次可处理时间".encode(), response.data)
+            self.assertIn("状态原因".encode(), response.data)
+            self.assertIn("waiting_for_stable".encode(), response.data)
             store.close()
 
     @unittest.skipIf(create_app is None, "Flask is not installed")
