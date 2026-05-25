@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from flask import Flask, Response, redirect, render_template_string, request, url_for
 
 from .db import ProcessingStore
+from .diagnostics import MotionPhoto2DiagnosticResult, run_motionphoto2_diagnostic
 from .logging_buffer import RecentLogHandler
 from .settings import Settings
 from .worker import LivePhotoWorker
@@ -144,6 +146,19 @@ PAGE_TEMPLATE = """
     }
     .log-row:last-child { border-bottom: 0; }
     .log-message { white-space: pre-wrap; word-break: break-word; }
+    .diagnostic-output {
+      max-height: 18rem;
+      overflow: auto;
+      border: 1px solid #dbe3ee;
+      border-radius: .85rem;
+      background: #0f172a;
+      color: #dbeafe;
+      padding: 1rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .86rem;
+    }
     .empty-state {
       border: 1px dashed #cad4e2;
       border-radius: 1rem;
@@ -183,6 +198,7 @@ PAGE_TEMPLATE = """
         <li class="nav-item"><a class="nav-link {% if page == 'stats' %}active{% endif %}" href="{{ url_for('stats_page') }}">查看统计</a></li>
         <li class="nav-item"><a class="nav-link {% if page == 'logs' %}active{% endif %}" href="{{ url_for('logs_page') }}">查看日志</a></li>
         <li class="nav-item"><a class="nav-link {% if page == 'debug_candidates' %}active{% endif %}" href="{{ url_for('debug_candidates_page') }}">候选调试</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'diagnostic_pair' %}active{% endif %}" href="{{ url_for('test_pair_page') }}">诊断</a></li>
         <li class="nav-item"><a class="nav-link {% if page == 'about' %}active{% endif %}" href="{{ url_for('about_page') }}">关于</a></li>
       </ul>
     </div>
@@ -214,6 +230,7 @@ PAGE_TEMPLATE = """
         <form method="post" action="{{ url_for('force_scan_now') }}" class="d-inline">
           <button type="submit" class="btn btn-warning btn-lg rounded-3 ms-2">🚀 强制扫描</button>
         </form>
+        <a class="btn btn-outline-primary btn-lg rounded-3 mt-2 mt-lg-0 ms-lg-2" href="{{ url_for('test_pair_page') }}">🧪 测试指定文件对</a>
       </div>
     </div>
     <div class="alert alert-info border-0 rounded-4 mt-4 mb-0">首次扫描大目录时，建议使用强制扫描。</div>
@@ -358,6 +375,59 @@ PAGE_TEMPLATE = """
     <div class="empty-state">当前没有等待稳定的候选文件</div>
     {% endif %}
   </section>
+  {% elif page == 'diagnostic_pair' %}
+  <section class="section-card p-4 mb-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between gap-3 align-items-md-center mb-3">
+      <div>
+        <h1 class="h3 fw-bold mb-1">🧪 测试指定文件对</h1>
+        <p class="text-secondary mb-0">绕过扫描、稳定等待和去重，直接调用 MotionPhoto2，适合复现单个文件对无法合并的问题。</p>
+      </div>
+      <a class="btn btn-outline-secondary rounded-3" href="{{ url_for('logs_page') }}">查看日志</a>
+    </div>
+    <form method="post" action="{{ url_for('test_pair_run') }}">
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <label class="form-label config-label" for="diagnostic_image">image</label>
+          <input class="form-control text-path" id="diagnostic_image" name="image" type="text" value="{{ diagnostic_image }}" required>
+        </div>
+        <div class="col-lg-6">
+          <label class="form-label config-label" for="diagnostic_video">video</label>
+          <input class="form-control text-path" id="diagnostic_video" name="video" type="text" value="{{ diagnostic_video }}" required>
+        </div>
+      </div>
+      <div class="d-flex flex-wrap gap-2 mt-4">
+        <button type="submit" class="btn btn-danger rounded-3">测试指定文件对</button>
+        <span class="text-secondary small align-self-center">成功时输出到 /photos/live/年份/月份/文件名.jpg</span>
+      </div>
+    </form>
+  </section>
+  {% if diagnostic_result %}
+  <section class="section-card p-4">
+    {% if diagnostic_result.success %}
+    <div class="alert alert-success rounded-4 border-0">测试成功：{{ diagnostic_result.reason }}</div>
+    {% else %}
+    <div class="alert alert-danger rounded-4 border-0">测试失败：{{ diagnostic_result.reason }}</div>
+    {% endif %}
+    <div class="row g-3 mb-4">
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">image exists</div><div class="metric-value fs-4">{{ diagnostic_result.image_exists }}</div><div class="metric-small text-path">{{ diagnostic_result.image_path }}</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">video exists</div><div class="metric-value fs-4">{{ diagnostic_result.video_exists }}</div><div class="metric-small text-path">{{ diagnostic_result.video_path }}</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">return code</div><div class="metric-value fs-4">{{ diagnostic_result.returncode }}</div><div class="metric-small">MotionPhoto2 退出码</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">output path</div><div class="metric-value fs-6 mt-2 text-path">{{ diagnostic_result.output_path }}</div><div class="metric-small">诊断输出文件</div></div></div>
+    </div>
+    <h2 class="section-title mb-2">MotionPhoto2 command</h2>
+    <pre class="diagnostic-output mb-4">{{ diagnostic_result.command_text }}</pre>
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <h2 class="section-title mb-2">stdout</h2>
+        <pre class="diagnostic-output">{{ diagnostic_result.stdout or '(empty)' }}</pre>
+      </div>
+      <div class="col-lg-6">
+        <h2 class="section-title mb-2">stderr</h2>
+        <pre class="diagnostic-output">{{ diagnostic_result.stderr or '(empty)' }}</pre>
+      </div>
+    </div>
+  </section>
+  {% endif %}
   {% elif page == 'about' %}
   <section class="section-card p-5 text-center">
     <div class="about-logo mb-3">▶</div>
@@ -627,10 +697,24 @@ def create_app(
     worker: LivePhotoWorker,
     store: ProcessingStore,
     log_handler: RecentLogHandler,
+    diagnostic_runner: Callable[[Path, Path], MotionPhoto2DiagnosticResult] | None = None,
 ) -> Flask:
     app = Flask(__name__)
 
-    def render_page(page: str, title: str, *, message: str = "") -> str:
+    def run_diagnostic(image_path: Path, video_path: Path) -> MotionPhoto2DiagnosticResult:
+        if diagnostic_runner is not None:
+            return diagnostic_runner(image_path, video_path)
+        return run_motionphoto2_diagnostic(settings=settings, image_path=image_path, video_path=video_path)
+
+    def render_page(
+        page: str,
+        title: str,
+        *,
+        message: str = "",
+        diagnostic_image: str = "/photos/2026/5/IMG_0056.HEIC",
+        diagnostic_video: str = "/photos/2026/5/IMG_0056.MOV",
+        diagnostic_result: dict[str, object] | None = None,
+    ) -> str:
         stats = store.stats()
         recent_jobs = store.recent_jobs(limit=20)
         log_entries = _log_entries(log_handler.recent(limit=120))
@@ -665,6 +749,9 @@ def create_app(
             app_version=APP_VERSION,
             github_url=GITHUB_URL,
             message=message,
+            diagnostic_image=diagnostic_image,
+            diagnostic_video=diagnostic_video,
+            diagnostic_result=diagnostic_result,
         )
 
     @app.get("/")
@@ -692,6 +779,15 @@ def create_app(
     def debug_candidates_page() -> str:
         return render_page("debug_candidates", "候选调试", message=request.args.get("message", ""))
 
+    @app.get("/debug/test-pair")
+    def test_pair_page() -> str:
+        return render_page(
+            "diagnostic_pair",
+            "测试指定文件对",
+            diagnostic_image=request.args.get("image", "/photos/2026/5/IMG_0056.HEIC"),
+            diagnostic_video=request.args.get("video", "/photos/2026/5/IMG_0056.MOV"),
+        )
+
     @app.get("/favicon.svg")
     def favicon() -> Response:
         return Response(FAVICON_SVG, mimetype="image/svg+xml")
@@ -716,6 +812,19 @@ def create_app(
         else:
             processed_count = worker.scan_once()
         return redirect(url_for("index", message=f"已强制扫描并忽略稳定等待，本轮处理 {processed_count} 个候选"))
+
+    @app.post("/debug/test-pair")
+    def test_pair_run() -> str:
+        image = request.form.get("image", "/photos/2026/5/IMG_0056.HEIC").strip()
+        video = request.form.get("video", "/photos/2026/5/IMG_0056.MOV").strip()
+        result = run_diagnostic(Path(image), Path(video))
+        return render_page(
+            "diagnostic_pair",
+            "测试指定文件对",
+            diagnostic_image=image,
+            diagnostic_video=video,
+            diagnostic_result=result.to_dict(),
+        )
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

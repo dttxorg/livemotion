@@ -70,6 +70,7 @@ http://NAS_IP:8011
 - 查看最近日志
 - 查看处理统计
 - `/debug/candidates` 查看当前等待稳定的候选队列、等待时长和状态原因
+- `/debug/test-pair` 测试指定文件对，绕过扫描、稳定等待和去重，直接调用 MotionPhoto2
 
 可配置字段：
 
@@ -94,6 +95,29 @@ http://NAS_IP:8011
 - `skip_dir_names` 每行一个目录名；系统会始终跳过 `.stfolder`、`@eaDir`、`#recycle`、`.Trash`、`.AppleDouble`、`__MACOSX`，并自动排除位于输入目录内的 output/archive/failed。
 - 首次扫描大目录时，建议使用“强制扫描并忽略稳定等待”；日常增量同步建议使用默认稳定等待，避免处理未传输完成的文件。
 - 失败文件仍会移动到 `failed_dir`，避免反复失败重试。
+
+### 最小可复现诊断
+
+如果日志显示已经识别到 Live Photo 文件对，但后续没有合并，可在 Web UI 打开“诊断 / 测试指定文件对”：
+
+```text
+http://NAS_IP:8011/debug/test-pair
+```
+
+默认测试：
+
+```text
+image=/photos/2026/5/IMG_0056.HEIC
+video=/photos/2026/5/IMG_0056.MOV
+```
+
+点击“测试指定文件对”后会直接调用 MotionPhoto2，不经过扫描、不等待 `stable_seconds`、不经过去重。成功时输出到：
+
+```text
+/photos/live/2026/5/IMG_0056.jpg
+```
+
+页面和日志都会显示 `image exists`、`video exists`、`output path`、`MotionPhoto2 command`、`return code`、`stdout`、`stderr`，失败时页面会直接显示失败原因。
 
 ## Docker Compose 部署
 

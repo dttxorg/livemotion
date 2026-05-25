@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from livephoto_worker.diagnostics import MotionPhoto2DiagnosticResult, run_motionphoto2_diagnostic
 from livephoto_worker.db import ProcessingStore
 from livephoto_worker.file_utils import hash_pair
 from livephoto_worker.models import MediaPair
@@ -484,6 +485,49 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(latest["status"], "failed")
             store.close()
 
+    def test_diagnostic_pair_runs_motionphoto2_directly_to_live_folder(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            photos_root = root / "photos"
+            image = photos_root / "2026" / "5" / "IMG_0056.HEIC"
+            video = photos_root / "2026" / "5" / "IMG_0056.MOV"
+            write_file(image, b"image-bytes")
+            write_file(video, b"video-bytes")
+            fake_bin = create_fake_motionphoto2(root / "motionphoto2")
+            settings = test_settings(root, motionphoto2_bin=str(fake_bin))
+
+            with self.assertLogs("livephoto_worker.diagnostics", level="INFO") as captured:
+                result = run_motionphoto2_diagnostic(
+                    settings=settings,
+                    image_path=image,
+                    video_path=video,
+                    output_root=photos_root / "live",
+                    photos_root=photos_root,
+                )
+
+            expected_output = photos_root / "live" / "2026" / "5" / "IMG_0056.jpg"
+            self.assertTrue(result.success)
+            self.assertTrue(result.image_exists)
+            self.assertTrue(result.video_exists)
+            self.assertEqual(result.output_path, expected_output)
+            self.assertTrue(expected_output.is_file())
+            self.assertIn("--input-image", result.command)
+            self.assertIn(str(image), result.command)
+            self.assertIn("--input-video", result.command)
+            self.assertIn(str(video), result.command)
+            self.assertIn("--output-file", result.command)
+            self.assertIn(str(expected_output), result.command)
+            self.assertEqual(result.returncode, 0)
+            log_text = "\n".join(captured.output)
+            self.assertIn("image exists", log_text)
+            self.assertIn("video exists", log_text)
+            self.assertIn("output path", log_text)
+            self.assertIn("MotionPhoto2 command", log_text)
+            self.assertIn("return code", log_text)
+            self.assertIn("stdout", log_text)
+            self.assertIn("stderr", log_text)
+
     def test_live_photo_candidate_info_is_limited_to_first_ten(self) -> None:
         logging.disable(logging.NOTSET)
         with tempfile.TemporaryDirectory() as tmp:
@@ -776,6 +820,62 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("下一次可处理时间".encode(), response.data)
             self.assertIn("状态原因".encode(), response.data)
             self.assertIn("waiting_for_stable".encode(), response.data)
+            store.close()
+
+    @unittest.skipIf(create_app is None, "Flask is not installed")
+    def test_web_diagnostic_pair_page_runs_and_shows_failure_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = test_settings(root)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            fake_worker = FakeWebWorker()
+            log_handler = RecentLogHandler()
+            calls: list[tuple[Path, Path]] = []
+
+            def fake_diagnostic_runner(image_path: Path, video_path: Path) -> MotionPhoto2DiagnosticResult:
+                calls.append((image_path, video_path))
+                return MotionPhoto2DiagnosticResult(
+                    success=False,
+                    reason="MotionPhoto2 exited with code 7",
+                    image_path=image_path,
+                    video_path=video_path,
+                    output_path=Path("/photos/live/2026/5/IMG_0056.jpg"),
+                    image_exists=True,
+                    video_exists=True,
+                    command=["motionphoto2", "--input-image", str(image_path), "--input-video", str(video_path)],
+                    returncode=7,
+                    stdout="diagnostic stdout",
+                    stderr="diagnostic stderr",
+                )
+
+            app = create_app(  # type: ignore[misc]
+                settings=settings,
+                worker=fake_worker,  # type: ignore[arg-type]
+                store=store,
+                log_handler=log_handler,
+                diagnostic_runner=fake_diagnostic_runner,
+            )
+            client = app.test_client()
+
+            response = client.get("/debug/test-pair")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("测试指定文件对".encode(), response.data)
+            self.assertIn("/photos/2026/5/IMG_0056.HEIC".encode(), response.data)
+            self.assertIn("/photos/2026/5/IMG_0056.MOV".encode(), response.data)
+
+            response = client.post("/debug/test-pair", data={
+                "image": "/photos/2026/5/IMG_0056.HEIC",
+                "video": "/photos/2026/5/IMG_0056.MOV",
+            })
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(calls, [(Path("/photos/2026/5/IMG_0056.HEIC"), Path("/photos/2026/5/IMG_0056.MOV"))])
+            self.assertIn("测试失败".encode(), response.data)
+            self.assertIn("MotionPhoto2 exited with code 7".encode(), response.data)
+            self.assertIn("return code".encode(), response.data)
+            self.assertIn("diagnostic stdout".encode(), response.data)
+            self.assertIn("diagnostic stderr".encode(), response.data)
+            self.assertIn("/photos/live/2026/5/IMG_0056.jpg".encode(), response.data)
             store.close()
 
     @unittest.skipIf(create_app is None, "Flask is not installed")
