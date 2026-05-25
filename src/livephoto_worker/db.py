@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import MediaPair, PairHashes
+from .models import MediaItem, MediaPair, PairHashes
 
 
 def utc_now() -> str:
@@ -53,6 +53,15 @@ class ProcessingStore:
                     error TEXT,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    file_signature TEXT PRIMARY KEY,
+                    media_type TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_sha256 TEXT NOT NULL,
+                    output_path TEXT NOT NULL,
+                    processed_at TEXT NOT NULL
+                );
                 """
             )
             self.conn.commit()
@@ -62,6 +71,14 @@ class ProcessingStore:
             row = self.conn.execute(
                 "SELECT 1 FROM processed_pairs WHERE pair_signature = ? LIMIT 1",
                 (pair_signature,),
+            ).fetchone()
+        return row is not None
+
+    def is_file_processed(self, file_signature: str) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM processed_files WHERE file_signature = ? LIMIT 1",
+                (file_signature,),
             ).fetchone()
         return row is not None
 
@@ -117,6 +134,45 @@ class ProcessingStore:
             output_path=None,
             error=None,
         )
+
+    def record_copied_file(self, item: MediaItem, file_sha256: str, output_path: Path) -> None:
+        now = utc_now()
+        file_signature = f"sha256:{file_sha256}"
+        status = "copied_photo" if item.media_type == "photo" else "copied_video"
+        with self.lock, self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO processed_files (
+                    file_signature, media_type, file_name, file_sha256, output_path, processed_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_signature,
+                    item.media_type,
+                    item.path.name,
+                    file_sha256,
+                    str(output_path),
+                    now,
+                ),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO jobs (
+                    pair_signature, stem, image_name, video_name,
+                    status, output_path, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_signature,
+                    item.path.stem,
+                    item.path.name if item.media_type == "photo" else "",
+                    item.path.name if item.media_type == "video" else "",
+                    status,
+                    str(output_path),
+                    None,
+                    now,
+                ),
+            )
 
     def record_job(
         self,
@@ -189,6 +245,12 @@ class ProcessingStore:
             failed_count = self.conn.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE status = 'failed'"
             ).fetchone()["count"]
+            copied_photo_count = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE status = 'copied_photo'"
+            ).fetchone()["count"]
+            copied_video_count = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE status = 'copied_video'"
+            ).fetchone()["count"]
             today_count = self.conn.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE date(created_at, 'localtime') = date('now', 'localtime')",
             ).fetchone()["count"]
@@ -204,6 +266,8 @@ class ProcessingStore:
             "processed_count": processed_count,
             "success_count": success_count,
             "failed_count": failed_count,
+            "copied_photo_count": copied_photo_count,
+            "copied_video_count": copied_video_count,
             "today_count": today_count,
             "total_jobs": total_jobs,
             "by_status": {row["status"]: row["count"] for row in job_rows},

@@ -22,6 +22,8 @@ STATUS_LABELS = {
     "success": "成功",
     "failed": "失败",
     "skipped_duplicate": "已跳过重复",
+    "copied_photo": "已复制照片",
+    "copied_video": "已复制视频",
 }
 LOG_LEVEL_BADGES = {
     "DEBUG": "text-bg-secondary",
@@ -222,6 +224,10 @@ PAGE_TEMPLATE = """
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败文件数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">需要人工检查</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">最近处理时间</div><div class="metric-value fs-6 mt-2">{{ stats.latest_job_at or '暂无记录' }}</div><div class="metric-small">任务记录更新时间</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前监听目录</div><div class="metric-value fs-6 mt-2 text-path">{{ settings.input_dir }}</div><div class="metric-small">当前队列数量：{{ queue_count }}</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描目录数</div><div class="metric-value">{{ scan_stats.scanned_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描文件数</div><div class="metric-value">{{ scan_stats.scanned_files }}</div><div class="metric-small">最近一次扫描</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">跳过目录数</div><div class="metric-value">{{ scan_stats.skipped_dirs }}</div><div class="metric-small">已排除输出/归档/特殊目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">合并 Live Photo 数</div><div class="metric-value">{{ scan_stats.merged_live_photos }}</div><div class="metric-small">本次服务启动后累计</div></div></div>
     </div>
   </section>
 
@@ -280,6 +286,12 @@ PAGE_TEMPLATE = """
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败次数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">失败文件会移动到失败目录</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">今日处理数量</div><div class="metric-value">{{ stats.today_count }}</div><div class="metric-small">按 NAS 本地日期统计</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前队列数量</div><div class="metric-value">{{ queue_count }}</div><div class="metric-small">等待稳定窗口的文件对</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描目录数</div><div class="metric-value">{{ scan_stats.scanned_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描文件数</div><div class="metric-value">{{ scan_stats.scanned_files }}</div><div class="metric-small">最近一次扫描</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">跳过目录数</div><div class="metric-value">{{ scan_stats.skipped_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">合并 Live Photo 数</div><div class="metric-value">{{ scan_stats.merged_live_photos }}</div><div class="metric-small">本次服务启动后累计</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">复制普通照片数</div><div class="metric-value">{{ stats.copied_photo_count }}</div><div class="metric-small">已复制到输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">复制普通视频数</div><div class="metric-value">{{ stats.copied_video_count }}</div><div class="metric-small">已复制到输出目录</div></div></div>
     </div>
   </section>
   <section class="section-card p-4 mb-4">
@@ -361,6 +373,25 @@ CONFIG_FORM_TEMPLATE = """
         <div class="text-secondary small mt-1">开启后，成功转换的原始文件会移动到归档目录。</div>
       </div>
     </div>
+    <div class="col-md-6">
+      <div class="form-check form-switch p-3 rounded-4 border bg-light h-100">
+        <input class="form-check-input ms-0 me-2" id="recursive_scan" name="recursive_scan" type="checkbox" value="1" {% if settings.recursive_scan %}checked{% endif %}>
+        <label class="form-check-label fw-semibold" for="recursive_scan">递归扫描</label>
+        <div class="text-secondary small mt-1">开启后会扫描输入目录下所有子文件夹。</div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="form-check form-switch p-3 rounded-4 border bg-light h-100">
+        <input class="form-check-input ms-0 me-2" id="preserve_directory_structure" name="preserve_directory_structure" type="checkbox" value="1" {% if settings.preserve_directory_structure %}checked{% endif %}>
+        <label class="form-check-label fw-semibold" for="preserve_directory_structure">保留原目录结构</label>
+        <div class="text-secondary small mt-1">输出、归档和失败目录会保留相对路径。</div>
+      </div>
+    </div>
+    <div class="col-12">
+      <label class="form-label config-label" for="skip_dir_names">跳过目录列表</label>
+      <textarea class="form-control" id="skip_dir_names" name="skip_dir_names" rows="7" spellcheck="false">{{ settings.skip_dir_names | join('\n') }}</textarea>
+      <div class="text-secondary small mt-2">每行一个目录名。默认跳过 .stfolder、@eaDir、#recycle、.Trash、.AppleDouble、__MACOSX，并自动排除 output/archive/failed 目录。</div>
+    </div>
   </div>
   <div class="d-flex flex-wrap gap-2 mt-4">
     <button type="submit" class="btn btn-primary rounded-3">保存配置</button>
@@ -421,6 +452,13 @@ def _form_to_config(form: Any) -> dict[str, Any]:
         "poll_interval": float(form.get("poll_interval", 10)),
         "move_originals": "move_originals" in form,
         "enable_archive": "enable_archive" in form,
+        "recursive_scan": "recursive_scan" in form,
+        "preserve_directory_structure": "preserve_directory_structure" in form,
+        "skip_dir_names": [
+            line.strip()
+            for line in form.get("skip_dir_names", "").replace(",", "\n").splitlines()
+            if line.strip()
+        ],
     }
 
 
@@ -453,6 +491,8 @@ def _status_badge(status: str) -> str:
         return "text-bg-danger"
     if status == "skipped_duplicate":
         return "text-bg-secondary"
+    if status in {"copied_photo", "copied_video"}:
+        return "text-bg-primary"
     return "text-bg-info"
 
 
@@ -465,6 +505,23 @@ def _queue_count(worker: LivePhotoWorker) -> int:
         return len(pending)
     with scan_lock:
         return len(pending)
+
+
+def _scan_stats(worker: LivePhotoWorker) -> dict[str, int]:
+    stats = getattr(worker, "scan_stats", None)
+    if stats is None:
+        return {
+            "scanned_dirs": 0,
+            "scanned_files": 0,
+            "skipped_dirs": 0,
+            "merged_live_photos": 0,
+            "copied_photos": 0,
+            "copied_videos": 0,
+        }
+    to_dict = getattr(stats, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return dict(stats)
 
 
 def _dir_fields(settings: Settings) -> list[dict[str, str]]:
@@ -514,6 +571,7 @@ def create_app(
             jobs_table=jobs_table,
             logs_panel=logs_panel,
             queue_count=_queue_count(worker),
+            scan_stats=_scan_stats(worker),
             app_version=APP_VERSION,
             github_url=GITHUB_URL,
             message=message,

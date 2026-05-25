@@ -27,7 +27,17 @@ Docker 化的 Live Photo 合成 worker，适用于飞牛 NAS / Debian。它不�
   "stable_seconds": 30,
   "poll_interval": 10,
   "move_originals": true,
-  "enable_archive": true
+  "enable_archive": true,
+  "recursive_scan": true,
+  "preserve_directory_structure": true,
+  "skip_dir_names": [
+    ".stfolder",
+    "@eaDir",
+    "#recycle",
+    ".Trash",
+    ".AppleDouble",
+    "__MACOSX"
+  ]
 }
 ```
 
@@ -68,11 +78,17 @@ http://NAS_IP:8011
 - `poll_interval`
 - `move_originals`
 - `enable_archive`
+- `recursive_scan`
+- `preserve_directory_structure`
+- `skip_dir_names`
 
 说明：
 
 - `move_originals=false` 时，成功处理后原始图片和视频会留在输入目录。
 - `enable_archive=false` 时，即使 `move_originals=true`，成功原始文件也不会移动到归档目录。
+- `recursive_scan=true` 时递归扫描输入目录的多层子目录。
+- `preserve_directory_structure=true` 时，输出、归档、失败目录会保留相对路径。
+- `skip_dir_names` 每行一个目录名；系统会始终跳过 `.stfolder`、`@eaDir`、`#recycle`、`.Trash`、`.AppleDouble`、`__MACOSX`，并自动排除位于输入目录内的 output/archive/failed。
 - 失败文件仍会移动到 `failed_dir`，避免反复失败重试。
 
 ## Docker Compose 部署
@@ -107,13 +123,18 @@ docker compose down
 
 ## 处理规则
 
-- 只扫描 `input_dir` 的直接子文件，不递归扫描子目录。
-- 同名规则：`IMG_0001.HEIC` + `IMG_0001.MOV` 会被视为一组。
-- 支持 `.HEIC` / `.HEIF` / `.JPG` / `.JPEG` + `.MOV` / `.MP4`，大小写不敏感。
+- 默认递归扫描 `input_dir` 的所有子目录，也可在 Web UI 中关闭递归扫描。
+- Live Photo 只在同一个目录内配对同名图片和视频，不跨目录配对，避免误配。
+- 支持图片：`.HEIC` / `.HEIF` / `.JPG` / `.JPEG` / `.PNG`，大小写不敏感。
+- 支持视频：`.MOV` / `.MP4` / `.M4V`，大小写不敏感。
 - 如果同一 stem 同时有 HEIC 和 JPG，优先处理 HEIC。
-- 输出文件默认沿用图片文件名，例如 `IMG_0001.HEIC`。
+- Motion Photo 输出默认沿用图片文件名，例如 `IMG_0001.HEIC`。
+- 普通照片和普通视频会复制到 `output_dir`，原文件保留在输入目录。
+- 开启“保留原目录结构”后，输出、归档、失败目录都会保留 input_dir 下的相对路径。
+- 如果 output/archive/failed 目录位于 input_dir 内，扫描器会自动排除，防止重复处理。
+- 递归扫描会跳过 `.stfolder`、`@eaDir`、`#recycle`、`.Trash`、`.AppleDouble`、`__MACOSX`。
 - 如果输出或归档目录已有同名文件，会自动追加内容指纹短后缀，避免覆盖。
-- SQLite 使用图片和视频的 SHA-256 内容指纹判断是否已成功处理过。
+- SQLite 使用 SHA-256 内容指纹判断是否已成功处理过，避免重复处理。
 
 ## 本地测试
 

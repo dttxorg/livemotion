@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
 from .db import ProcessingStore
-from .file_utils import hash_pair, move_one_file, quick_pair_state, unique_path
-from .models import MediaPair, PairHashes
+from .file_utils import file_signature, hash_pair, move_one_file, quick_pair_state, unique_path
+from .models import MediaItem, MediaPair, PairHashes
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ class PairProcessor:
         self.settings = settings
         self.store = store
 
-    def process(self, pair: MediaPair) -> None:
+    def process(self, pair: MediaPair) -> bool:
         logger.info("Preparing pair: image=%s video=%s", pair.image_path.name, pair.video_path.name)
         pair_signature: str | None = None
         hashes: PairHashes | None = None
@@ -37,9 +38,9 @@ class PairProcessor:
                 if self.settings.move_originals and self.settings.enable_archive:
                     self._archive_pair(pair, marker=marker)
                     self.store.record_duplicate(pair, hashes)
-                return
+                return False
 
-            output_path = unique_path(self.settings.output_dir, pair.image_path.name, marker=marker)
+            output_path = unique_path(self._destination_dir(self.settings.output_dir, pair.image_path), pair.image_path.name, marker=marker)
             started_at = time.time()
             self._run_motionphoto2(pair, output_path)
 
@@ -50,6 +51,7 @@ class PairProcessor:
             self._handle_successful_originals(pair, marker=marker)
             self.store.record_success(pair, hashes, actual_output)
             logger.info("Created Motion Photo: %s", actual_output)
+            return True
         except Exception as exc:  # noqa: BLE001 - quarantine bad inputs and keep the daemon alive.
             error = str(exc)
             logger.exception("Failed to process pair %s: %s", pair.stem, error)
@@ -58,6 +60,30 @@ class PairProcessor:
                 marker = hashes.image_sha256[:12]
             self._move_failed_artifacts(pair, output_path, marker=marker)
             self.store.record_failure(pair, pair_signature, error, output_path=output_path)
+            return False
+
+    def process_media(self, item: MediaItem) -> bool:
+        logger.info("Preparing ordinary %s: %s", item.media_type, item.path)
+        signature: str | None = None
+        try:
+            signature, digest = file_signature(item.path)
+            marker = digest[:12]
+            if self.store.is_file_processed(signature):
+                logger.info("Ordinary %s already copied; skipping duplicate for %s", item.media_type, item.path.name)
+                return False
+
+            destination_dir = self._destination_dir(self.settings.output_dir, item.path)
+            output_path = unique_path(destination_dir, item.path.name, marker=marker)
+            shutil.copy2(item.path, output_path)
+            self.store.record_copied_file(item, digest, output_path)
+            logger.info("Copied ordinary %s to output: %s", item.media_type, output_path)
+            return True
+        except Exception as exc:  # noqa: BLE001 - keep daemon alive and quarantine bad inputs when possible.
+            error = str(exc)
+            logger.exception("Failed to copy ordinary %s %s: %s", item.media_type, item.path, error)
+            marker = signature.split(":", 1)[1][:12] if signature else None
+            move_one_file(item.path, self._destination_dir(self.settings.failed_dir, item.path), marker=marker)
+            return False
 
     def _run_motionphoto2(self, pair: MediaPair, output_path: Path) -> None:
         command = [
@@ -106,14 +132,26 @@ class PairProcessor:
         self._archive_pair(pair, marker=marker)
 
     def _archive_pair(self, pair: MediaPair, marker: str | None) -> None:
-        moved_image = move_one_file(pair.image_path, self.settings.archive_dir, marker=marker)
-        moved_video = move_one_file(pair.video_path, self.settings.archive_dir, marker=marker)
+        moved_image = move_one_file(pair.image_path, self._destination_dir(self.settings.archive_dir, pair.image_path), marker=marker)
+        moved_video = move_one_file(pair.video_path, self._destination_dir(self.settings.archive_dir, pair.video_path), marker=marker)
         logger.info("Archived originals: image=%s video=%s", moved_image, moved_video)
 
     def _move_failed_artifacts(self, pair: MediaPair, output_path: Path | None, marker: str | None) -> None:
-        moved_image = move_one_file(pair.image_path, self.settings.failed_dir, marker=marker)
-        moved_video = move_one_file(pair.video_path, self.settings.failed_dir, marker=marker)
+        moved_image = move_one_file(pair.image_path, self._destination_dir(self.settings.failed_dir, pair.image_path), marker=marker)
+        moved_video = move_one_file(pair.video_path, self._destination_dir(self.settings.failed_dir, pair.video_path), marker=marker)
         if output_path is not None and output_path.exists():
-            partial = move_one_file(output_path, self.settings.failed_dir, marker=f"{marker or 'failed'}_partial")
+            partial = move_one_file(output_path, self._destination_dir(self.settings.failed_dir, pair.image_path), marker=f"{marker or 'failed'}_partial")
             logger.info("Moved partial output to failed: %s", partial)
         logger.info("Moved failed inputs: image=%s video=%s", moved_image, moved_video)
+
+    def _destination_dir(self, root: Path, source: Path) -> Path:
+        if not self.settings.preserve_directory_structure:
+            return root
+        try:
+            relative_parent = source.relative_to(self.settings.input_dir).parent
+        except ValueError:
+            return root
+        if str(relative_parent) in ("", "."):
+            return root
+        logger.info("Preserved relative path: %s", relative_parent)
+        return root / relative_parent

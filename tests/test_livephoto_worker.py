@@ -10,7 +10,7 @@ from livephoto_worker.db import ProcessingStore
 from livephoto_worker.file_utils import hash_pair
 from livephoto_worker.models import MediaPair
 from livephoto_worker.processor import PairProcessor
-from livephoto_worker.scanner import scan_pairs
+from livephoto_worker.scanner import scan_media, scan_pairs
 from livephoto_worker.settings import Settings
 from livephoto_worker.worker import LivePhotoWorker
 from livephoto_worker.logging_buffer import RecentLogHandler
@@ -106,6 +106,10 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(settings.poll_interval, 10)
             self.assertTrue(settings.move_originals)
             self.assertTrue(settings.enable_archive)
+            self.assertTrue(settings.recursive_scan)
+            self.assertTrue(settings.preserve_directory_structure)
+            self.assertIn(".stfolder", settings.skip_dir_names)
+            self.assertIn("@eaDir", settings.skip_dir_names)
 
     def test_config_file_is_loaded_and_saved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,6 +125,9 @@ class LivePhotoWorkerTests(unittest.TestCase):
                 "poll_interval": 3,
                 "move_originals": False,
                 "enable_archive": False,
+                "recursive_scan": False,
+                "preserve_directory_structure": False,
+                "skip_dir_names": ["custom-skip"],
             }))
 
             settings = Settings.load(config_path=config_path)
@@ -134,12 +141,18 @@ class LivePhotoWorkerTests(unittest.TestCase):
                 "poll_interval": 2,
                 "move_originals": True,
                 "enable_archive": True,
+                "recursive_scan": True,
+                "preserve_directory_structure": True,
+                "skip_dir_names": [".stfolder", "custom-skip"],
             })
 
             saved = json.loads(config_path.read_text())
             self.assertEqual(saved["input_dir"], str(root / "new-inbox"))
             self.assertEqual(saved["stable_seconds"], 5)
             self.assertTrue(saved["move_originals"])
+            self.assertTrue(saved["recursive_scan"])
+            self.assertTrue(saved["preserve_directory_structure"])
+            self.assertEqual(saved["skip_dir_names"], [".stfolder", "custom-skip"])
 
     def test_scan_pairs_matches_same_stem_and_prefers_heic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,6 +168,115 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(pairs[0].stem, "IMG_0001")
             self.assertEqual(pairs[0].image_path.name, "IMG_0001.HEIC")
             self.assertEqual(pairs[0].video_path.name, "IMG_0001.MOV")
+
+    def test_scan_media_recurses_and_does_not_pair_across_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_file(root / "2024" / "01" / "IMG_0001.HEIC", b"heic")
+            write_file(root / "2024" / "01" / "IMG_0001.MOV", b"mov")
+            write_file(root / "2024" / "02" / "IMG_0002.JPG", b"jpg")
+            write_file(root / "2025" / "trip" / "IMG_0002.MP4", b"mp4")
+            write_file(root / "2025" / "trip" / "CLIP.M4V", b"m4v")
+            write_file(root / "2025" / "trip" / "PHOTO.PNG", b"png")
+
+            result = scan_media(root)
+
+            self.assertEqual(len(result.pairs), 1)
+            self.assertEqual(result.pairs[0].image_path, root / "2024" / "01" / "IMG_0001.HEIC")
+            self.assertEqual(result.pairs[0].video_path, root / "2024" / "01" / "IMG_0001.MOV")
+            self.assertEqual(
+                {(item.path.name, item.media_type) for item in result.media_items},
+                {
+                    ("IMG_0002.JPG", "photo"),
+                    ("IMG_0002.MP4", "video"),
+                    ("CLIP.M4V", "video"),
+                    ("PHOTO.PNG", "photo"),
+                },
+            )
+
+    def test_recursive_worker_merges_live_photo_and_preserves_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            archive_dir = root / "archive"
+            failed_dir = root / "failed"
+            write_file(input_dir / "2024" / "01" / "IMG_0001.HEIC", b"image-bytes")
+            write_file(input_dir / "2024" / "01" / "IMG_0001.MOV", b"video-bytes")
+            fake_bin = create_fake_motionphoto2(root / "motionphoto2")
+            settings = test_settings(
+                root,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                archive_dir=archive_dir,
+                failed_dir=failed_dir,
+                motionphoto2_bin=str(fake_bin),
+                stable_seconds=0,
+            )
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            worker.scan_once(now=100)
+            processed = worker.scan_once(now=101)
+
+            self.assertEqual(processed, 1)
+            self.assertTrue((output_dir / "2024" / "01" / "IMG_0001.HEIC").is_file())
+            self.assertTrue((archive_dir / "2024" / "01" / "IMG_0001.HEIC").is_file())
+            self.assertTrue((archive_dir / "2024" / "01" / "IMG_0001.MOV").is_file())
+            self.assertEqual(worker.scan_stats.merged_live_photos, 1)
+            store.close()
+
+    def test_recursive_worker_copies_ordinary_photo_and_video_with_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            write_file(input_dir / "2024" / "02" / "IMG_0002.PNG", b"png")
+            write_file(input_dir / "2025" / "trip" / "IMG_0003.M4V", b"m4v")
+            settings = test_settings(root, input_dir=input_dir, output_dir=output_dir, stable_seconds=0)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            worker.scan_once(now=100)
+            processed = worker.scan_once(now=101)
+
+            self.assertEqual(processed, 2)
+            self.assertTrue((output_dir / "2024" / "02" / "IMG_0002.PNG").is_file())
+            self.assertTrue((output_dir / "2025" / "trip" / "IMG_0003.M4V").is_file())
+            self.assertTrue((input_dir / "2024" / "02" / "IMG_0002.PNG").is_file())
+            self.assertTrue((input_dir / "2025" / "trip" / "IMG_0003.M4V").is_file())
+            stats = store.stats()
+            self.assertEqual(stats["copied_photo_count"], 1)
+            self.assertEqual(stats["copied_video_count"], 1)
+            self.assertEqual(worker.scan_stats.copied_photos, 1)
+            self.assertEqual(worker.scan_stats.copied_videos, 1)
+            store.close()
+
+    def test_recursive_scan_skips_output_dir_when_nested_in_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = input_dir / "motion_output"
+            write_file(input_dir / "2024" / "solo.JPG", b"photo")
+            write_file(output_dir / "already-output.JPG", b"output-only")
+            settings = test_settings(root, input_dir=input_dir, output_dir=output_dir, stable_seconds=0)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            worker.scan_once(now=100)
+            worker.scan_once(now=101)
+
+            self.assertTrue((output_dir / "2024" / "solo.JPG").is_file())
+            self.assertFalse((output_dir / "motion_output" / "already-output.JPG").exists())
+            self.assertGreaterEqual(worker.scan_stats.skipped_dirs, 1)
+            self.assertEqual(store.stats()["copied_photo_count"], 1)
+            store.close()
 
     def test_worker_waits_until_pair_state_is_stable_for_settle_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,6 +473,9 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("失败文件数".encode(), response.data)
             self.assertIn("最近处理时间".encode(), response.data)
             self.assertIn("当前监听目录".encode(), response.data)
+            self.assertIn("递归扫描".encode(), response.data)
+            self.assertIn("保留原目录结构".encode(), response.data)
+            self.assertIn("跳过目录列表".encode(), response.data)
 
             response = client.post("/save", data={
                 "input_dir": str(root / "photos" / "in"),
@@ -360,6 +485,9 @@ class LivePhotoWorkerTests(unittest.TestCase):
                 "stable_seconds": "9",
                 "poll_interval": "4",
                 "move_originals": "1",
+                "recursive_scan": "1",
+                "preserve_directory_structure": "1",
+                "skip_dir_names": ".stfolder\n@eaDir\n#recycle",
             })
             self.assertEqual(response.status_code, 302)
             saved = json.loads(settings.config_path.read_text())
@@ -367,6 +495,9 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(saved["stable_seconds"], 9.0)
             self.assertTrue(saved["move_originals"])
             self.assertFalse(saved["enable_archive"])
+            self.assertTrue(saved["recursive_scan"])
+            self.assertTrue(saved["preserve_directory_structure"])
+            self.assertEqual(saved["skip_dir_names"], [".stfolder", "@eaDir", "#recycle"])
             self.assertTrue(fake_worker.cleared)
 
             response = client.post("/scan")
@@ -424,6 +555,12 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("今日处理数量".encode(), stats_response.data)
             self.assertIn("最近处理文件".encode(), stats_response.data)
             self.assertIn("当前队列数量".encode(), stats_response.data)
+            self.assertIn("扫描目录数".encode(), stats_response.data)
+            self.assertIn("扫描文件数".encode(), stats_response.data)
+            self.assertIn("跳过目录数".encode(), stats_response.data)
+            self.assertIn("合并 Live Photo 数".encode(), stats_response.data)
+            self.assertIn("复制普通照片数".encode(), stats_response.data)
+            self.assertIn("复制普通视频数".encode(), stats_response.data)
 
             about_response = client.get("/about")
             self.assertEqual(about_response.status_code, 200)

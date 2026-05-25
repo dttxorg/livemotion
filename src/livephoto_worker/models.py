@@ -12,7 +12,17 @@ class MediaPair:
 
     @property
     def key(self) -> str:
-        return f"{self.image_path.name}|{self.video_path.name}"
+        return f"{self.image_path}|{self.video_path}"
+
+
+@dataclass(frozen=True)
+class MediaItem:
+    path: Path
+    media_type: str
+
+    @property
+    def key(self) -> str:
+        return str(self.path)
 
 
 @dataclass(frozen=True)

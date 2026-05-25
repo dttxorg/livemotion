@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,19 @@ CONFIG_KEYS = {
     "poll_interval",
     "move_originals",
     "enable_archive",
+    "recursive_scan",
+    "preserve_directory_structure",
+    "skip_dir_names",
 }
+
+DEFAULT_SKIP_DIR_NAMES = [
+    ".stfolder",
+    "@eaDir",
+    "#recycle",
+    ".Trash",
+    ".AppleDouble",
+    "__MACOSX",
+]
 
 
 def env_path(name: str, default: str) -> Path:
@@ -57,6 +69,21 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in TRUTHY
 
 
+def env_list(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return list(default)
+    return [item.strip() for item in raw.replace(",", "\n").splitlines() if item.strip()]
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.replace(",", "\n").splitlines() if item.strip()]
+    return list(DEFAULT_SKIP_DIR_NAMES)
+
+
 @dataclass
 class Settings:
     input_dir: Path = env_path("INPUT_DIR", "/photos/live_inbox")
@@ -67,6 +94,9 @@ class Settings:
     poll_interval: float = env_float("POLL_INTERVAL", env_float("WATCH_INTERVAL_SECONDS", 10.0))
     move_originals: bool = env_bool("MOVE_ORIGINALS", True)
     enable_archive: bool = env_bool("ENABLE_ARCHIVE", True)
+    recursive_scan: bool = env_bool("RECURSIVE_SCAN", True)
+    preserve_directory_structure: bool = env_bool("PRESERVE_DIRECTORY_STRUCTURE", True)
+    skip_dir_names: list[str] = field(default_factory=lambda: env_list("SKIP_DIR_NAMES", DEFAULT_SKIP_DIR_NAMES))
 
     config_path: Path = env_path("CONFIG_PATH", "/config/config.json")
     db_path: Path = env_path("DB_PATH", "/config/livephoto-worker.sqlite3")
@@ -111,6 +141,12 @@ class Settings:
             self.move_originals = _coerce_bool(raw["move_originals"])
         if "enable_archive" in raw:
             self.enable_archive = _coerce_bool(raw["enable_archive"])
+        if "recursive_scan" in raw:
+            self.recursive_scan = _coerce_bool(raw["recursive_scan"])
+        if "preserve_directory_structure" in raw:
+            self.preserve_directory_structure = _coerce_bool(raw["preserve_directory_structure"])
+        if "skip_dir_names" in raw:
+            self.skip_dir_names = _coerce_str_list(raw["skip_dir_names"])
 
     def to_config_dict(self) -> dict[str, Any]:
         data = asdict(self)

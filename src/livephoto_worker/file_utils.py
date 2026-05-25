@@ -4,7 +4,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from .models import MediaPair, PairHashes
+from .models import MediaItem, MediaPair, PairHashes
 
 HASH_CHUNK_SIZE = 1024 * 1024
 
@@ -16,6 +16,10 @@ def quick_file_state(path: Path) -> str:
 
 def quick_pair_state(pair: MediaPair) -> str:
     return f"{quick_file_state(pair.image_path)}|{quick_file_state(pair.video_path)}"
+
+
+def quick_media_item_state(item: MediaItem) -> str:
+    return quick_file_state(item.path)
 
 
 def sha256_file(path: Path) -> str:
@@ -31,6 +35,11 @@ def hash_pair(pair: MediaPair) -> PairHashes:
         image_sha256=sha256_file(pair.image_path),
         video_sha256=sha256_file(pair.video_path),
     )
+
+
+def file_signature(path: Path) -> tuple[str, str]:
+    digest = sha256_file(path)
+    return f"sha256:{digest}", digest
 
 
 def unique_path(directory: Path, filename: str, marker: str | None = None) -> Path:
