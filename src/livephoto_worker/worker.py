@@ -34,6 +34,8 @@ class WorkerScanStats:
     merged_live_photos: int = 0
     copied_photos: int = 0
     copied_videos: int = 0
+    skipped: int = 0
+    failed: int = 0
 
     def apply_scan_stats(self, stats: ScanStats) -> None:
         self.scanned_dirs = stats.scanned_dirs
@@ -48,6 +50,8 @@ class WorkerScanStats:
             "merged_live_photos": self.merged_live_photos,
             "copied_photos": self.copied_photos,
             "copied_videos": self.copied_videos,
+            "skipped": self.skipped,
+            "failed": self.failed,
         }
 
 
@@ -92,6 +96,7 @@ class LivePhotoWorker:
 
     def _scan_once_unlocked(self, now: float | None = None) -> int:
         now = time.time() if now is None else now
+        logger.info("Scanning input folder as full media library: %s", self.settings.input_dir)
         scan_result = scan_media(
             self.settings.input_dir,
             recursive=self.settings.recursive_scan,
@@ -103,6 +108,11 @@ class LivePhotoWorker:
         self.scan_stats.apply_scan_stats(scan_result.stats)
         seen_keys: set[str] = set()
         processed_count = 0
+        merged_live = 0
+        copied_photos = 0
+        copied_videos = 0
+        skipped = 0
+        failed = 0
 
         for pair in scan_result.pairs:
             key = self._pending_key("pair", pair)
@@ -119,10 +129,17 @@ class LivePhotoWorker:
                 continue
 
             self.pending.pop(key, None)
-            merged = self.processor.process(pair)
+            result = self.processor.process(pair)
             self.completed_states[key] = current_state
-            if merged:
+            if result == "merged":
                 self.scan_stats.merged_live_photos += 1
+                merged_live += 1
+            elif result == "skipped":
+                self.scan_stats.skipped += 1
+                skipped += 1
+            elif result == "failed":
+                self.scan_stats.failed += 1
+                failed += 1
             processed_count += 1
 
         for item in scan_result.media_items:
@@ -140,13 +157,20 @@ class LivePhotoWorker:
                 continue
 
             self.pending.pop(key, None)
-            copied = self.processor.process_media(item)
+            result = self.processor.process_media(item)
             self.completed_states[key] = current_state
-            if copied:
-                if item.media_type == "photo":
-                    self.scan_stats.copied_photos += 1
-                elif item.media_type == "video":
-                    self.scan_stats.copied_videos += 1
+            if result == "copied_photo":
+                self.scan_stats.copied_photos += 1
+                copied_photos += 1
+            elif result == "copied_video":
+                self.scan_stats.copied_videos += 1
+                copied_videos += 1
+            elif result == "skipped":
+                self.scan_stats.skipped += 1
+                skipped += 1
+            elif result == "failed":
+                self.scan_stats.failed += 1
+                failed += 1
             processed_count += 1
 
         stale_keys = set(self.pending) - seen_keys
@@ -154,6 +178,14 @@ class LivePhotoWorker:
             logger.debug("Dropping stale pending work: %s", key)
             self.pending.pop(key, None)
 
+        logger.info(
+            "Scan finished: merged_live=%s copied_photos=%s copied_videos=%s skipped=%s failed=%s",
+            merged_live,
+            copied_photos,
+            copied_videos,
+            skipped,
+            failed,
+        )
         return processed_count
 
     def _is_stable(self, key: str, kind: WorkKind, item: WorkItem, current_state: str, now: float) -> bool:

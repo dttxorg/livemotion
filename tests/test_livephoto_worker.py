@@ -223,6 +223,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             self.assertEqual(processed, 1)
             self.assertTrue((output_dir / "2024" / "01" / "IMG_0001.HEIC").is_file())
+            self.assertFalse((output_dir / "2024" / "01" / "IMG_0001.MOV").exists())
             self.assertTrue((archive_dir / "2024" / "01" / "IMG_0001.HEIC").is_file())
             self.assertTrue((archive_dir / "2024" / "01" / "IMG_0001.MOV").is_file())
             self.assertEqual(worker.scan_stats.merged_live_photos, 1)
@@ -254,6 +255,14 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(stats["copied_video_count"], 1)
             self.assertEqual(worker.scan_stats.copied_photos, 1)
             self.assertEqual(worker.scan_stats.copied_videos, 1)
+
+            restarted_worker = LivePhotoWorker(settings=settings, processor=processor)
+            restarted_worker.scan_once(now=200)
+            restarted_worker.scan_once(now=201)
+            restarted_stats = store.stats()
+            self.assertEqual(restarted_stats["copied_photo_count"], 1)
+            self.assertEqual(restarted_stats["copied_video_count"], 1)
+            self.assertEqual(restarted_stats["skipped_count"], 2)
             store.close()
 
     def test_recursive_scan_skips_output_dir_when_nested_in_input(self) -> None:
@@ -276,6 +285,28 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertFalse((output_dir / "motion_output" / "already-output.JPG").exists())
             self.assertGreaterEqual(worker.scan_stats.skipped_dirs, 1)
             self.assertEqual(store.stats()["copied_photo_count"], 1)
+            store.close()
+
+    def test_scan_logs_full_media_library_summary(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            write_file(input_dir / "album" / "solo.JPG", b"photo")
+            settings = test_settings(root, input_dir=input_dir, output_dir=output_dir, stable_seconds=0)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            worker = LivePhotoWorker(settings=settings, processor=processor)
+
+            with self.assertLogs("livephoto_worker.worker", level="INFO") as captured:
+                worker.scan_once(now=100)
+                worker.scan_once(now=101)
+
+            log_text = "\n".join(captured.output)
+            self.assertIn("Scanning input folder as full media library", log_text)
+            self.assertIn("merged_live=0 copied_photos=1 copied_videos=0 skipped=0 failed=0", log_text)
             store.close()
 
     def test_worker_waits_until_pair_state_is_stable_for_settle_window(self) -> None:
@@ -462,7 +493,8 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("LiveMotion 控制台".encode(), response.data)
             self.assertIn("Live Photo 输入目录".encode(), response.data)
-            self.assertIn("Motion Photo 输出目录".encode(), response.data)
+            self.assertIn("Pixel 同步输出目录".encode(), response.data)
+            self.assertIn("Pixel 只需要同步此输出目录。".encode(), response.data)
             self.assertIn("原始文件归档目录".encode(), response.data)
             self.assertIn("失败文件目录".encode(), response.data)
             self.assertIn("文件稳定等待时间（秒）".encode(), response.data)
@@ -550,17 +582,17 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             stats_response = client.get("/stats")
             self.assertEqual(stats_response.status_code, 200)
-            self.assertIn("成功次数".encode(), stats_response.data)
-            self.assertIn("失败次数".encode(), stats_response.data)
+            self.assertIn("已合并 Live Photo 数量".encode(), stats_response.data)
+            self.assertIn("失败数量".encode(), stats_response.data)
             self.assertIn("今日处理数量".encode(), stats_response.data)
             self.assertIn("最近处理文件".encode(), stats_response.data)
             self.assertIn("当前队列数量".encode(), stats_response.data)
             self.assertIn("扫描目录数".encode(), stats_response.data)
             self.assertIn("扫描文件数".encode(), stats_response.data)
             self.assertIn("跳过目录数".encode(), stats_response.data)
-            self.assertIn("合并 Live Photo 数".encode(), stats_response.data)
-            self.assertIn("复制普通照片数".encode(), stats_response.data)
-            self.assertIn("复制普通视频数".encode(), stats_response.data)
+            self.assertIn("已跳过数量".encode(), stats_response.data)
+            self.assertIn("已复制普通照片数量".encode(), stats_response.data)
+            self.assertIn("已复制普通视频数量".encode(), stats_response.data)
 
             about_response = client.get("/about")
             self.assertEqual(about_response.status_code, 200)

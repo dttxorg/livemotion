@@ -203,7 +203,7 @@ PAGE_TEMPLATE = """
             <h1 class="display-6 fw-bold mb-0">LiveMotion 控制台</h1>
           </div>
         </div>
-        <p class="lead text-secondary mb-0">监听输入目录，自动合成 Google Photos 可识别的 Motion Photo，并归档原始文件。</p>
+        <p class="lead text-secondary mb-0">监听完整照片库，自动合并 Live Photo，并把普通照片/视频整理到 Pixel 同步输出目录。Pixel 只需要同步此输出目录。</p>
       </div>
       <div class="col-lg-4 text-lg-end">
         <form method="post" action="{{ url_for('scan_now') }}" class="d-inline">
@@ -227,7 +227,10 @@ PAGE_TEMPLATE = """
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描目录数</div><div class="metric-value">{{ scan_stats.scanned_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描文件数</div><div class="metric-value">{{ scan_stats.scanned_files }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">跳过目录数</div><div class="metric-value">{{ scan_stats.skipped_dirs }}</div><div class="metric-small">已排除输出/归档/特殊目录</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">合并 Live Photo 数</div><div class="metric-value">{{ scan_stats.merged_live_photos }}</div><div class="metric-small">本次服务启动后累计</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已合并 Live Photo 数量</div><div class="metric-value">{{ stats.success_count }}</div><div class="metric-small">已生成 Motion Photo 单文件</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已复制普通照片数量</div><div class="metric-value">{{ stats.copied_photo_count }}</div><div class="metric-small">已进入 Pixel 同步输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已复制普通视频数量</div><div class="metric-value">{{ stats.copied_video_count }}</div><div class="metric-small">已进入 Pixel 同步输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已跳过数量</div><div class="metric-value">{{ stats.skipped_count }}</div><div class="metric-small">已处理过或重复内容</div></div></div>
     </div>
   </section>
 
@@ -282,16 +285,16 @@ PAGE_TEMPLATE = """
       <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary rounded-3">立即扫描</button></form>
     </div>
     <div class="row g-3">
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">成功次数</div><div class="metric-value text-success">{{ stats.success_count }}</div><div class="metric-small">成功合成 Motion Photo</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败次数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">失败文件会移动到失败目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已合并 Live Photo 数量</div><div class="metric-value text-success">{{ stats.success_count }}</div><div class="metric-small">成功合成 Motion Photo</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败数量</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">失败文件会移动到失败目录</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">今日处理数量</div><div class="metric-value">{{ stats.today_count }}</div><div class="metric-small">按 NAS 本地日期统计</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前队列数量</div><div class="metric-value">{{ queue_count }}</div><div class="metric-small">等待稳定窗口的文件对</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描目录数</div><div class="metric-value">{{ scan_stats.scanned_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">扫描文件数</div><div class="metric-value">{{ scan_stats.scanned_files }}</div><div class="metric-small">最近一次扫描</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">跳过目录数</div><div class="metric-value">{{ scan_stats.skipped_dirs }}</div><div class="metric-small">最近一次扫描</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">合并 Live Photo 数</div><div class="metric-value">{{ scan_stats.merged_live_photos }}</div><div class="metric-small">本次服务启动后累计</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">复制普通照片数</div><div class="metric-value">{{ stats.copied_photo_count }}</div><div class="metric-small">已复制到输出目录</div></div></div>
-      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">复制普通视频数</div><div class="metric-value">{{ stats.copied_video_count }}</div><div class="metric-small">已复制到输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已跳过数量</div><div class="metric-value">{{ stats.skipped_count }}</div><div class="metric-small">已处理过或重复内容</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已复制普通照片数量</div><div class="metric-value">{{ stats.copied_photo_count }}</div><div class="metric-small">已复制到 Pixel 同步输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已复制普通视频数量</div><div class="metric-value">{{ stats.copied_video_count }}</div><div class="metric-small">已复制到 Pixel 同步输出目录</div></div></div>
     </div>
   </section>
   <section class="section-card p-4 mb-4">
@@ -517,6 +520,8 @@ def _scan_stats(worker: LivePhotoWorker) -> dict[str, int]:
             "merged_live_photos": 0,
             "copied_photos": 0,
             "copied_videos": 0,
+            "skipped": 0,
+            "failed": 0,
         }
     to_dict = getattr(stats, "to_dict", None)
     if callable(to_dict):
@@ -527,7 +532,7 @@ def _scan_stats(worker: LivePhotoWorker) -> dict[str, int]:
 def _dir_fields(settings: Settings) -> list[dict[str, str]]:
     return [
         {"name": "input_dir", "label": "Live Photo 输入目录", "value": str(settings.input_dir)},
-        {"name": "output_dir", "label": "Motion Photo 输出目录", "value": str(settings.output_dir)},
+        {"name": "output_dir", "label": "Pixel 同步输出目录", "value": str(settings.output_dir)},
         {"name": "archive_dir", "label": "原始文件归档目录", "value": str(settings.archive_dir)},
         {"name": "failed_dir", "label": "失败文件目录", "value": str(settings.failed_dir)},
     ]

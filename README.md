@@ -7,7 +7,8 @@ Docker 化的 Live Photo 合成 worker，适用于飞牛 NAS / Debian。它不�
 - 后台 worker 监听配置中的 `input_dir`。
 - 发现同名图片和视频对后等待 `stable_seconds`，确认文件大小/mtime 稳定后处理。
 - 调用 MotionPhoto2 合成为 Google Photos 可识别的 Motion Photo 单文件。
-- 成功输出到 `output_dir`。
+- 普通照片和普通视频不调用 MotionPhoto2，保留 EXIF/mtime 直接复制到 `output_dir`。
+- `output_dir` 是 Pixel / Syncthing 唯一需要同步的整理后目录，包含 Motion Photo、普通照片和普通视频。
 - 失败文件移动到 `failed_dir`。
 - 可选将成功处理后的原始文件移动到 `archive_dir`。
 - SQLite 记录已成功处理的文件内容指纹，避免重复合成。
@@ -130,6 +131,8 @@ docker compose down
 - 如果同一 stem 同时有 HEIC 和 JPG，优先处理 HEIC。
 - Motion Photo 输出默认沿用图片文件名，例如 `IMG_0001.HEIC`。
 - 普通照片和普通视频会复制到 `output_dir`，原文件保留在输入目录。
+- 已成功合并的 Live Photo 伴生 MOV 不会再作为普通视频复制到 `output_dir`。
+- Pixel 只需要同步 `output_dir`，不要再同步原始输入目录。
 - 开启“保留原目录结构”后，输出、归档、失败目录都会保留 input_dir 下的相对路径。
 - 如果 output/archive/failed 目录位于 input_dir 内，扫描器会自动排除，防止重复处理。
 - 递归扫描会跳过 `.stfolder`、`@eaDir`、`#recycle`、`.Trash`、`.AppleDouble`、`__MACOSX`。

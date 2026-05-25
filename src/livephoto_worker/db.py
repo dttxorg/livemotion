@@ -174,6 +174,52 @@ class ProcessingStore:
                 ),
             )
 
+    def record_skipped_file(self, item: MediaItem, file_signature: str) -> None:
+        self._record_media_job(
+            item=item,
+            file_signature=file_signature,
+            status="skipped_duplicate",
+            output_path=None,
+            error=None,
+        )
+
+    def record_media_failure(self, item: MediaItem, file_signature: str | None, error: str) -> None:
+        self._record_media_job(
+            item=item,
+            file_signature=file_signature,
+            status="failed",
+            output_path=None,
+            error=error,
+        )
+
+    def _record_media_job(
+        self,
+        item: MediaItem,
+        file_signature: str | None,
+        status: str,
+        output_path: Path | None,
+        error: str | None,
+    ) -> None:
+        with self.lock, self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO jobs (
+                    pair_signature, stem, image_name, video_name,
+                    status, output_path, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_signature,
+                    item.path.stem,
+                    item.path.name if item.media_type == "photo" else "",
+                    item.path.name if item.media_type == "video" else "",
+                    status,
+                    str(output_path) if output_path is not None else None,
+                    error,
+                    utc_now(),
+                ),
+            )
+
     def record_job(
         self,
         pair: MediaPair,
@@ -251,6 +297,9 @@ class ProcessingStore:
             copied_video_count = self.conn.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE status = 'copied_video'"
             ).fetchone()["count"]
+            skipped_count = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE status = 'skipped_duplicate'"
+            ).fetchone()["count"]
             today_count = self.conn.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE date(created_at, 'localtime') = date('now', 'localtime')",
             ).fetchone()["count"]
@@ -268,6 +317,7 @@ class ProcessingStore:
             "failed_count": failed_count,
             "copied_photo_count": copied_photo_count,
             "copied_video_count": copied_video_count,
+            "skipped_count": skipped_count,
             "today_count": today_count,
             "total_jobs": total_jobs,
             "by_status": {row["status"]: row["count"] for row in job_rows},
