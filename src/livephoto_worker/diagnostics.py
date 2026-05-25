@@ -7,6 +7,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from .motionphoto_paths import preferred_motionphoto_suffix, resolve_motionphoto_output
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ def diagnostic_output_path(
         relative_image = image_path.relative_to(photos_root)
     except ValueError:
         relative_image = Path(image_path.name)
-    return output_root / relative_image.with_suffix(".jpg")
+    return output_root / relative_image.with_suffix(preferred_motionphoto_suffix(image_path))
 
 
 def run_motionphoto2_diagnostic(
@@ -220,7 +221,11 @@ def run_motionphoto2_diagnostic(
     logger.info("stdout:\n%s", stdout.rstrip())
     logger.info("stderr:\n%s", stderr.rstrip())
 
-    success = result.returncode == 0 and output_path.is_file()
+    actual_output_path = resolve_motionphoto_output(output_path) if result.returncode == 0 else output_path
+    if actual_output_path != output_path:
+        logger.info("actual output path: %s", actual_output_path)
+
+    success = result.returncode == 0 and actual_output_path is not None and actual_output_path.is_file()
     if success:
         reason = "MotionPhoto2 diagnostic conversion succeeded"
     elif result.returncode != 0:
@@ -235,7 +240,7 @@ def run_motionphoto2_diagnostic(
         reason=reason,
         image_path=image_path,
         video_path=video_path,
-        output_path=output_path,
+        output_path=actual_output_path or output_path,
         image_exists=image_exists,
         video_exists=video_exists,
         command=command,

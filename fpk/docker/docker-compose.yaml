@@ -1,6 +1,6 @@
 services:
   livemotion:
-    image: ghcr.io/dttxorg/livemotion:0.1.2
+    image: ghcr.io/dttxorg/livemotion:0.1.3
     container_name: livemotion
     restart: unless-stopped
     environment:

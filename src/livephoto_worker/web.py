@@ -13,7 +13,7 @@ from .logging_buffer import RecentLogHandler
 from .settings import Settings
 from .worker import LivePhotoWorker
 
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 GITHUB_URL = "https://github.com/dttxorg/livemotion"
 COMMON_DIRECTORIES = (
     "/photos/live_inbox",
@@ -410,7 +410,7 @@ PAGE_TEMPLATE = """
       </div>
       <div class="d-flex flex-wrap gap-2 mt-4">
         <button type="submit" class="btn btn-danger rounded-3">测试指定文件对</button>
-        <span class="text-secondary small align-self-center">成功时输出到 /photos/live/年份/月份/文件名.jpg</span>
+        <span class="text-secondary small align-self-center">成功时输出为与原图一致的格式，例如 HEIC 输出 .heic，JPG 输出 .jpg。</span>
       </div>
     </form>
   </section>

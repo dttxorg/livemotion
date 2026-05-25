@@ -9,6 +9,7 @@ from pathlib import Path
 from .db import ProcessingStore
 from .file_utils import file_signature, hash_pair, move_one_file, quick_pair_state, unique_path
 from .models import MediaItem, MediaPair, PairHashes
+from .motionphoto_paths import motionphoto_output_filename, resolve_motionphoto_output
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,9 @@ class PairProcessor:
                 return "skipped"
 
             destination_dir = self._destination_dir(self.settings.output_dir, pair.image_path)
-            desired_output_path = destination_dir / pair.image_path.name
-            output_path = unique_path(destination_dir, pair.image_path.name, marker=marker)
+            output_filename = motionphoto_output_filename(pair.image_path)
+            desired_output_path = destination_dir / output_filename
+            output_path = unique_path(destination_dir, output_filename, marker=marker)
             if output_path != desired_output_path:
                 logger.info("Candidate output path exists: reason=output_exists existing=%s using=%s", desired_output_path, output_path)
             logger.info(
@@ -65,6 +67,8 @@ class PairProcessor:
             actual_output = self._resolve_output_path(output_path, started_at)
             if actual_output is None or not actual_output.is_file():
                 raise RuntimeError(f"MotionPhoto2 finished but output file was not created: {output_path}")
+            if actual_output != output_path:
+                logger.info("MotionPhoto2 actual output path: expected=%s actual=%s", output_path, actual_output)
 
             self._handle_successful_originals(pair, marker=marker)
             self.store.record_success(pair, hashes, actual_output)
@@ -151,13 +155,7 @@ class PairProcessor:
             )
 
     def _resolve_output_path(self, expected_path: Path, started_at: float) -> Path | None:
-        if expected_path.exists():
-            return expected_path
-        siblings = sorted(expected_path.parent.glob(f"{expected_path.stem}.*"))
-        for sibling in siblings:
-            if sibling.is_file() and sibling.stat().st_mtime >= started_at - 1:
-                return sibling
-        return None
+        return resolve_motionphoto_output(expected_path, started_at=started_at)
 
     def _handle_successful_originals(self, pair: MediaPair, marker: str | None) -> None:
         if not self.settings.move_originals:

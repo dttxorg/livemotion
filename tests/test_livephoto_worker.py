@@ -10,6 +10,7 @@ from livephoto_worker.diagnostics import (
     MotionPhoto2DiagnosticResult,
     MotionPhoto2Status,
     check_motionphoto2_available,
+    diagnostic_output_path,
     run_motionphoto2_diagnostic,
 )
 from livephoto_worker.db import ProcessingStore
@@ -103,6 +104,29 @@ exit {exit_code}
         exit_code=exit_code,
         write_output="yes" if write_output else "no",
     )
+    path.write_text(script)
+    path.chmod(0o755)
+    return path
+
+
+def create_fake_motionphoto2_with_suffix(path: Path, actual_suffix: str) -> Path:
+    script = """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-file)
+      shift
+      out="$1"
+      ;;
+  esac
+  shift
+done
+if [ -n "$out" ]; then
+  base="${{out%.*}}"
+  printf 'motion-photo-output' > "${{base}}{actual_suffix}"
+fi
+exit 0
+""".format(actual_suffix=actual_suffix)
     path.write_text(script)
     path.chmod(0o755)
     return path
@@ -216,6 +240,22 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("--output-file", command)
             self.assertIn("/photos/motion_output/2026/5/IMG_0056.HEIC", command)
 
+    def test_diagnostic_output_path_matches_input_image_format(self) -> None:
+        photos_root = Path("/photos")
+
+        self.assertEqual(
+            diagnostic_output_path(Path("/photos/2026/5/IMG_0056.HEIC"), photos_root=photos_root),
+            Path("/photos/live/2026/5/IMG_0056.heic"),
+        )
+        self.assertEqual(
+            diagnostic_output_path(Path("/photos/2026/5/IMG_0057.HEIF"), photos_root=photos_root),
+            Path("/photos/live/2026/5/IMG_0057.heic"),
+        )
+        self.assertEqual(
+            diagnostic_output_path(Path("/photos/2026/5/IMG_0058.JPEG"), photos_root=photos_root),
+            Path("/photos/live/2026/5/IMG_0058.jpg"),
+        )
+
     def test_motionphoto2_startup_selfcheck_reports_unavailable(self) -> None:
         logging.disable(logging.NOTSET)
         with tempfile.TemporaryDirectory() as tmp:
@@ -297,7 +337,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
             processed = worker.scan_once(now=101)
 
             self.assertEqual(processed, 1)
-            self.assertTrue((output_dir / "2024" / "01" / "IMG_0001.HEIC").is_file())
+            self.assertTrue((output_dir / "2024" / "01" / "IMG_0001.heic").is_file())
             self.assertFalse((output_dir / "2024" / "01" / "IMG_0001.MOV").exists())
             self.assertTrue((archive_dir / "2024" / "01" / "IMG_0001.HEIC").is_file())
             self.assertTrue((archive_dir / "2024" / "01" / "IMG_0001.MOV").is_file())
@@ -482,7 +522,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
             processed = worker.force_scan_once(now=100)
 
             self.assertEqual(processed, 1)
-            self.assertTrue((output_dir / "2026" / "5" / "IMG_0056.HEIC").is_file())
+            self.assertTrue((output_dir / "2026" / "5" / "IMG_0056.heic").is_file())
             self.assertEqual(store.latest_job()["status"], "success")  # type: ignore[index]
             store.close()
 
@@ -550,7 +590,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
                     photos_root=photos_root,
                 )
 
-            expected_output = photos_root / "live" / "2026" / "5" / "IMG_0056.jpg"
+            expected_output = photos_root / "live" / "2026" / "5" / "IMG_0056.heic"
             self.assertTrue(result.success)
             self.assertTrue(result.image_exists)
             self.assertTrue(result.video_exists)
@@ -571,6 +611,33 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("return code", log_text)
             self.assertIn("stdout", log_text)
             self.assertIn("stderr", log_text)
+
+    def test_diagnostic_pair_accepts_actual_output_when_expected_missing(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            photos_root = root / "photos"
+            image = photos_root / "2026" / "5" / "IMG_0058.JPG"
+            video = photos_root / "2026" / "5" / "IMG_0058.MOV"
+            write_file(image, b"image-bytes")
+            write_file(video, b"video-bytes")
+            fake_bin = create_fake_motionphoto2_with_suffix(root / "motionphoto2", ".jpeg")
+            settings = test_settings(root, motionphoto2_bin=str(fake_bin))
+
+            with self.assertLogs("livephoto_worker.diagnostics", level="INFO") as captured:
+                result = run_motionphoto2_diagnostic(
+                    settings=settings,
+                    image_path=image,
+                    video_path=video,
+                    output_root=photos_root / "live",
+                    photos_root=photos_root,
+                )
+
+            actual_output = photos_root / "live" / "2026" / "5" / "IMG_0058.jpeg"
+            self.assertTrue(result.success)
+            self.assertEqual(result.output_path, actual_output)
+            self.assertTrue(actual_output.is_file())
+            self.assertIn("actual output path", "\n".join(captured.output))
 
     def test_live_photo_candidate_info_is_limited_to_first_ten(self) -> None:
         logging.disable(logging.NOTSET)
@@ -667,7 +734,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             processor.process(pair)
 
-            self.assertTrue((output_dir / "IMG_0001.HEIC").is_file())
+            self.assertTrue((output_dir / "IMG_0001.heic").is_file())
             self.assertFalse((input_dir / "IMG_0001.HEIC").exists())
             self.assertFalse((input_dir / "IMG_0001.MOV").exists())
             self.assertTrue((archive_dir / "IMG_0001.HEIC").is_file())
@@ -704,13 +771,50 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             processor.process(pair)
 
-            self.assertTrue((output_dir / "IMG_0001.HEIC").is_file())
+            self.assertTrue((output_dir / "IMG_0001.heic").is_file())
             self.assertTrue((input_dir / "IMG_0001.HEIC").is_file())
             self.assertTrue((input_dir / "IMG_0001.MOV").is_file())
             self.assertFalse((archive_dir / "IMG_0001.HEIC").exists())
             latest = store.latest_job()
             self.assertIsNotNone(latest)
             self.assertEqual(latest["status"], "success")
+            store.close()
+
+    def test_processor_records_actual_output_when_expected_missing(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            archive_dir = root / "archive"
+            failed_dir = root / "failed"
+            write_file(input_dir / "IMG_0058.JPG", b"image-bytes")
+            write_file(input_dir / "IMG_0058.MOV", b"video-bytes")
+            fake_bin = create_fake_motionphoto2_with_suffix(root / "motionphoto2", ".jpeg")
+            settings = test_settings(
+                root,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                archive_dir=archive_dir,
+                failed_dir=failed_dir,
+                motionphoto2_bin=str(fake_bin),
+            )
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            processor = PairProcessor(settings, store)
+            pair = MediaPair("IMG_0058", input_dir / "IMG_0058.JPG", input_dir / "IMG_0058.MOV")
+
+            with self.assertLogs("livephoto_worker.processor", level="INFO") as captured:
+                result = processor.process(pair)
+
+            actual_output = output_dir / "IMG_0058.jpeg"
+            self.assertEqual(result, "merged")
+            self.assertTrue(actual_output.is_file())
+            latest = store.latest_job()
+            self.assertIsNotNone(latest)
+            self.assertEqual(latest["status"], "success")
+            self.assertEqual(latest["output_path"], str(actual_output))
+            self.assertIn("actual output path", "\n".join(captured.output))
             store.close()
 
     def test_processor_duplicate_skips_motionphoto2_and_archives_originals(self) -> None:
@@ -895,7 +999,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
                     reason="MotionPhoto2 exited with code 7",
                     image_path=image_path,
                     video_path=video_path,
-                    output_path=Path("/photos/live/2026/5/IMG_0056.jpg"),
+                    output_path=Path("/photos/live/2026/5/IMG_0056.heic"),
                     image_exists=True,
                     video_exists=True,
                     command=["motionphoto2", "--input-image", str(image_path), "--input-video", str(video_path)],
@@ -918,6 +1022,8 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("测试指定文件对".encode(), response.data)
             self.assertIn("/photos/2026/5/IMG_0056.HEIC".encode(), response.data)
             self.assertIn("/photos/2026/5/IMG_0056.MOV".encode(), response.data)
+            self.assertIn("成功时输出为与原图一致的格式".encode(), response.data)
+            self.assertNotIn("成功时输出到 /photos/live/年份/月份/文件名.jpg".encode(), response.data)
 
             response = client.post("/debug/test-pair", data={
                 "image": "/photos/2026/5/IMG_0056.HEIC",
@@ -930,7 +1036,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("return code".encode(), response.data)
             self.assertIn("diagnostic stdout".encode(), response.data)
             self.assertIn("diagnostic stderr".encode(), response.data)
-            self.assertIn("/photos/live/2026/5/IMG_0056.jpg".encode(), response.data)
+            self.assertIn("/photos/live/2026/5/IMG_0056.heic".encode(), response.data)
             store.close()
 
     @unittest.skipIf(create_app is None, "Flask is not installed")

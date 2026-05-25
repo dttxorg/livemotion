@@ -111,10 +111,10 @@ image=/photos/2026/5/IMG_0056.HEIC
 video=/photos/2026/5/IMG_0056.MOV
 ```
 
-点击“测试指定文件对”后会直接调用 MotionPhoto2，不经过扫描、不等待 `stable_seconds`、不经过去重。成功时输出到：
+点击“测试指定文件对”后会直接调用 MotionPhoto2，不经过扫描、不等待 `stable_seconds`、不经过去重。成功时输出为与原图一致的格式，例如 HEIC 输出 `.heic`，JPG 输出 `.jpg`。默认示例成功时输出到：
 
 ```text
-/photos/live/2026/5/IMG_0056.jpg
+/photos/live/2026/5/IMG_0056.heic
 ```
 
 页面和日志都会显示 `image exists`、`video exists`、`output path`、`MotionPhoto2 command`、`return code`、`stdout`、`stderr`，失败时页面会直接显示失败原因。
@@ -253,7 +253,7 @@ app.tgz
 `fpk/docker/docker-compose.yaml` 使用预构建镜像，不在飞牛本机 build：
 
 ```yaml
-image: ghcr.io/dttxorg/livemotion:0.1.2
+image: ghcr.io/dttxorg/livemotion:0.1.3
 ports:
   - "8011:8011"
 volumes:
@@ -292,7 +292,7 @@ volumes:
 FPK 不再在飞牛 NAS 上执行 Docker build；飞牛只会拉取预构建镜像：
 
 ```text
-ghcr.io/dttxorg/livemotion:0.1.2
+ghcr.io/dttxorg/livemotion:0.1.3
 ```
 
 已提供 GitHub Actions workflow：
@@ -308,7 +308,7 @@ ghcr.io/dttxorg/livemotion:0.1.2
 
 推送 tag：
 
-- `ghcr.io/dttxorg/livemotion:0.1.2`
+- `ghcr.io/dttxorg/livemotion:0.1.3`
 - `ghcr.io/dttxorg/livemotion:latest`
 
 #### 1. 创建 GitHub 仓库
@@ -360,7 +360,7 @@ git remote set-url origin git@github.com:dttxorg/livemotion.git
 3. 找到 `Build and publish Docker image` workflow。
 4. 打开最新一次运行，确认所有步骤成功。
 5. 成功后 GHCR 应出现以下镜像 tag：
-   - `ghcr.io/dttxorg/livemotion:0.1.2`
+   - `ghcr.io/dttxorg/livemotion:0.1.3`
    - `ghcr.io/dttxorg/livemotion:latest`
 
 也可以在 `Actions` 页面点击 `Run workflow` 手动触发一次构建。
@@ -372,7 +372,7 @@ GitHub Actions 成功后：
 1. 打开 `https://github.com/dttxorg`。
 2. 点击 `Packages`。
 3. 找到 `livemotion` package。
-4. 打开 package 详情页，确认存在 `0.1.2` 和 `latest` tag。
+4. 打开 package 详情页，确认存在 `0.1.3` 和 `latest` tag。
 
 #### 5. 将 GHCR Package 设置为 Public
 
@@ -428,8 +428,8 @@ export GHCR_TOKEN="粘贴你的 GitHub PAT"
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u dttxorg --password-stdin
-docker build -t ghcr.io/dttxorg/livemotion:0.1.2 -t ghcr.io/dttxorg/livemotion:latest .
-docker push ghcr.io/dttxorg/livemotion:0.1.2
+docker build -t ghcr.io/dttxorg/livemotion:0.1.3 -t ghcr.io/dttxorg/livemotion:latest .
+docker push ghcr.io/dttxorg/livemotion:0.1.3
 docker push ghcr.io/dttxorg/livemotion:latest
 ```
 
@@ -438,13 +438,13 @@ docker push ghcr.io/dttxorg/livemotion:latest
 本地验证：
 
 ```bash
-docker pull ghcr.io/dttxorg/livemotion:0.1.2
+docker pull ghcr.io/dttxorg/livemotion:0.1.3
 ```
 
 飞牛 NAS / Debian 上验证：
 
 ```bash
-docker pull ghcr.io/dttxorg/livemotion:0.1.2
+docker pull ghcr.io/dttxorg/livemotion:0.1.3
 ```
 
 #### 9. 重新生成并安装 FPK
@@ -511,5 +511,5 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 正确镜像名应为：
 
 ```text
-ghcr.io/dttxorg/livemotion:0.1.2
+ghcr.io/dttxorg/livemotion:0.1.3
 ```
