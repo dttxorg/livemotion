@@ -6,6 +6,7 @@ import sys
 import threading
 
 from .db import ProcessingStore
+from .diagnostics import check_motionphoto2_available
 from .logging_buffer import RecentLogHandler
 from .processor import PairProcessor
 from .settings import Settings
@@ -40,12 +41,19 @@ def main() -> int:
 
     logger = logging.getLogger(__name__)
     logger.info("Loaded config from %s", settings.config_path)
+    motionphoto2_status = check_motionphoto2_available(settings)
 
     store = ProcessingStore(settings.db_path)
     processor = PairProcessor(settings=settings, store=store)
     worker = LivePhotoWorker(settings=settings, processor=processor)
     worker_thread = threading.Thread(target=worker.run_forever, name="livephoto-worker", daemon=True)
-    app = create_app(settings=settings, worker=worker, store=store, log_handler=recent_log_handler)
+    app = create_app(
+        settings=settings,
+        worker=worker,
+        store=store,
+        log_handler=recent_log_handler,
+        motionphoto2_status=motionphoto2_status,
+    )
 
     def handle_signal(signum: int, _frame: object) -> None:
         logger.info("Received signal %s", signum)

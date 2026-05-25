@@ -8,12 +8,12 @@ from typing import Any, Callable
 from flask import Flask, Response, redirect, render_template_string, request, url_for
 
 from .db import ProcessingStore
-from .diagnostics import MotionPhoto2DiagnosticResult, run_motionphoto2_diagnostic
+from .diagnostics import MotionPhoto2DiagnosticResult, MotionPhoto2Status, run_motionphoto2_diagnostic
 from .logging_buffer import RecentLogHandler
 from .settings import Settings
 from .worker import LivePhotoWorker
 
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 GITHUB_URL = "https://github.com/dttxorg/livemotion"
 COMMON_DIRECTORIES = (
     "/photos/live_inbox",
@@ -209,6 +209,16 @@ PAGE_TEMPLATE = """
   {% if message %}
   <div class="alert alert-success border-0 shadow-sm rounded-4" role="status">{{ message }}</div>
   {% endif %}
+  {% if not motionphoto2_status.available %}
+  <div class="alert alert-danger border-0 shadow-sm rounded-4" role="alert">
+    <div class="fw-bold">MotionPhoto2 不可用</div>
+    <div class="text-path mt-1">命令：{{ motionphoto2_status.command_text }}</div>
+    <div class="text-path mt-1">错误：{{ motionphoto2_status.error or '启动自检失败' }}</div>
+    {% if motionphoto2_status.stderr %}
+    <div class="text-path mt-1">stderr：{{ motionphoto2_status.stderr }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {% if page == 'dashboard' %}
   <section class="hero-card p-4 p-lg-5 mb-4">
@@ -239,13 +249,16 @@ PAGE_TEMPLATE = """
   <section class="section-card p-4 mb-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h2 class="section-title">📡 系统状态</h2>
-      <span class="badge text-bg-success rounded-pill px-3 py-2">运行中</span>
+      <span class="badge {% if motionphoto2_status.available %}text-bg-success{% else %}text-bg-danger{% endif %} rounded-pill px-3 py-2">
+        {% if motionphoto2_status.available %}运行中{% else %}MotionPhoto2 不可用{% endif %}
+      </span>
     </div>
     <div class="row g-3">
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已处理文件数</div><div class="metric-value">{{ stats.processed_count }}</div><div class="metric-small">已成功去重的文件对</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败文件数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">需要人工检查</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">最近处理时间</div><div class="metric-value fs-6 mt-2">{{ stats.latest_job_at or '暂无记录' }}</div><div class="metric-small">任务记录更新时间</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前监听目录</div><div class="metric-value fs-6 mt-2 text-path">{{ settings.input_dir }}</div><div class="metric-small">Pixel 只同步输出目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">MotionPhoto2 状态</div><div class="metric-value fs-5 mt-2 {% if motionphoto2_status.available %}text-success{% else %}text-danger{% endif %}">{% if motionphoto2_status.available %}可用{% else %}不可用{% endif %}</div><div class="metric-small text-path">{{ motionphoto2_status.command_text }}</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">等待稳定的文件数</div><div class="metric-value">{{ pending_status.waiting_count }}</div><div class="metric-small">当前等待队列</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">等待稳定的 Live Photo 数</div><div class="metric-value">{{ pending_status.waiting_live_pairs }}</div><div class="metric-small">等待稳定的文件对</div></div></div>
       <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前最早等待时间</div><div class="metric-value fs-6 mt-2">{{ pending_status.earliest_first_seen_text }}</div><div class="metric-small">最早进入等待队列</div></div></div>
@@ -697,9 +710,18 @@ def create_app(
     worker: LivePhotoWorker,
     store: ProcessingStore,
     log_handler: RecentLogHandler,
+    motionphoto2_status: MotionPhoto2Status | None = None,
     diagnostic_runner: Callable[[Path, Path], MotionPhoto2DiagnosticResult] | None = None,
 ) -> Flask:
     app = Flask(__name__)
+    if motionphoto2_status is None:
+        motionphoto2_status = MotionPhoto2Status(
+            available=True,
+            command=settings.build_motionphoto2_help_command(),
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
 
     def run_diagnostic(image_path: Path, video_path: Path) -> MotionPhoto2DiagnosticResult:
         if diagnostic_runner is not None:
@@ -749,6 +771,7 @@ def create_app(
             app_version=APP_VERSION,
             github_url=GITHUB_URL,
             message=message,
+            motionphoto2_status=motionphoto2_status.to_dict(),
             diagnostic_image=diagnostic_image,
             diagnostic_video=diagnostic_video,
             diagnostic_result=diagnostic_result,

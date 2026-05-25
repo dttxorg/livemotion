@@ -174,18 +174,26 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 ## MotionPhoto2
 
-Docker 构建阶段会下载 MotionPhoto2 Linux release（默认 `v2.7.7`）并安装 Debian 的 ExifTool 包。官方 Linux release 是 x86-64 ELF；飞牛 NAS 常见 x86_64 环境可用，ARM 设备需要另行准备可运行的 MotionPhoto2 并调整 `MOTIONPHOTO2_BIN`/Dockerfile。
+Docker 构建阶段不再使用 MotionPhoto2 的 PyInstaller release binary，避免 `GLIBC_2.38 not found` / `libpython3.13.so.1.0` 这类二进制兼容问题。
 
-MotionPhoto2 的 CLI 支持：
+当前镜像会从源码安装 MotionPhoto2（默认 Git tag `v2.7.7`），并保留 Debian 的 `exiftool` 与 `ffmpeg` 依赖。容器内默认调用方式为：
 
 ```bash
-motionphoto2 --input-image ImageFile.HEIC --input-video VideoFile.MOV --output-file OutputFile.HEIC
+python /opt/MotionPhoto2/motionphoto2.py --input-image ImageFile.HEIC --input-video VideoFile.MOV --output-file OutputFile.HEIC
 ```
+
+启动时会执行源码入口自检：
+
+```bash
+python /opt/MotionPhoto2/motionphoto2.py --help
+```
+
+如果自检失败，Web UI 首页会显示“MotionPhoto2 不可用”以及 stderr，便于定位依赖或环境问题。
 
 ## 参考
 
 - [MotionPhoto2 README](https://github.com/PetrVys/MotionPhoto2#readme)
-- [MotionPhoto2 v2.7.7 release](https://github.com/PetrVys/MotionPhoto2/releases/tag/v2.7.7)
+- [MotionPhoto2 v2.7.7 source](https://github.com/PetrVys/MotionPhoto2/tree/v2.7.7)
 
 ## FPK 封装（LiveMotion）
 
@@ -245,7 +253,7 @@ app.tgz
 `fpk/docker/docker-compose.yaml` 使用预构建镜像，不在飞牛本机 build：
 
 ```yaml
-image: ghcr.io/dttxorg/livemotion:0.1.1
+image: ghcr.io/dttxorg/livemotion:0.1.2
 ports:
   - "8011:8011"
 volumes:
@@ -284,7 +292,7 @@ volumes:
 FPK 不再在飞牛 NAS 上执行 Docker build；飞牛只会拉取预构建镜像：
 
 ```text
-ghcr.io/dttxorg/livemotion:0.1.1
+ghcr.io/dttxorg/livemotion:0.1.2
 ```
 
 已提供 GitHub Actions workflow：
@@ -300,7 +308,7 @@ ghcr.io/dttxorg/livemotion:0.1.1
 
 推送 tag：
 
-- `ghcr.io/dttxorg/livemotion:0.1.1`
+- `ghcr.io/dttxorg/livemotion:0.1.2`
 - `ghcr.io/dttxorg/livemotion:latest`
 
 #### 1. 创建 GitHub 仓库
@@ -352,7 +360,7 @@ git remote set-url origin git@github.com:dttxorg/livemotion.git
 3. 找到 `Build and publish Docker image` workflow。
 4. 打开最新一次运行，确认所有步骤成功。
 5. 成功后 GHCR 应出现以下镜像 tag：
-   - `ghcr.io/dttxorg/livemotion:0.1.1`
+   - `ghcr.io/dttxorg/livemotion:0.1.2`
    - `ghcr.io/dttxorg/livemotion:latest`
 
 也可以在 `Actions` 页面点击 `Run workflow` 手动触发一次构建。
@@ -364,7 +372,7 @@ GitHub Actions 成功后：
 1. 打开 `https://github.com/dttxorg`。
 2. 点击 `Packages`。
 3. 找到 `livemotion` package。
-4. 打开 package 详情页，确认存在 `0.1.1` 和 `latest` tag。
+4. 打开 package 详情页，确认存在 `0.1.2` 和 `latest` tag。
 
 #### 5. 将 GHCR Package 设置为 Public
 
@@ -420,8 +428,8 @@ export GHCR_TOKEN="粘贴你的 GitHub PAT"
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u dttxorg --password-stdin
-docker build -t ghcr.io/dttxorg/livemotion:0.1.1 -t ghcr.io/dttxorg/livemotion:latest .
-docker push ghcr.io/dttxorg/livemotion:0.1.1
+docker build -t ghcr.io/dttxorg/livemotion:0.1.2 -t ghcr.io/dttxorg/livemotion:latest .
+docker push ghcr.io/dttxorg/livemotion:0.1.2
 docker push ghcr.io/dttxorg/livemotion:latest
 ```
 
@@ -430,13 +438,13 @@ docker push ghcr.io/dttxorg/livemotion:latest
 本地验证：
 
 ```bash
-docker pull ghcr.io/dttxorg/livemotion:0.1.1
+docker pull ghcr.io/dttxorg/livemotion:0.1.2
 ```
 
 飞牛 NAS / Debian 上验证：
 
 ```bash
-docker pull ghcr.io/dttxorg/livemotion:0.1.1
+docker pull ghcr.io/dttxorg/livemotion:0.1.2
 ```
 
 #### 9. 重新生成并安装 FPK
@@ -503,5 +511,5 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 正确镜像名应为：
 
 ```text
-ghcr.io/dttxorg/livemotion:0.1.1
+ghcr.io/dttxorg/livemotion:0.1.2
 ```

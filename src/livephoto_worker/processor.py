@@ -109,17 +109,11 @@ class PairProcessor:
             return "failed"
 
     def _run_motionphoto2(self, pair: MediaPair, output_path: Path) -> None:
-        command = [
-            self.settings.motionphoto2_bin,
-            "--input-image",
-            str(pair.image_path),
-            "--input-video",
-            str(pair.video_path),
-            "--output-file",
-            str(output_path),
-        ]
-        if self.settings.motionphoto2_verbose:
-            command.append("--verbose")
+        command = self.settings.build_motionphoto2_command(
+            image_path=pair.image_path,
+            video_path=pair.video_path,
+            output_path=output_path,
+        )
 
         logger.info("Running MotionPhoto2 for %s -> %s", pair.stem, output_path.name)
         try:

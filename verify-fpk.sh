@@ -130,7 +130,7 @@ checksum = fields.get("checksum", "")
 if not re.fullmatch(r"[0-9a-f]{32}", checksum):
     raise SystemExit("manifest checksum must be a 32-char lowercase md5")
 
-if fields.get("fpk_version") != "0.1.1-r1":
+if fields.get("fpk_version") != "0.1.2-r1":
     raise SystemExit("manifest fpk_version mismatch")
 
 def png_size(path: Path) -> tuple[int, int]:
@@ -182,8 +182,8 @@ fi
 if grep -q 'ghcr.io/your-user' "$TMP_DIR/app/docker/docker-compose.yaml"; then
     fail "docker-compose.yaml must not contain placeholder ghcr.io/your-user"
 fi
-if ! grep -q 'image: ghcr.io/dttxorg/livemotion:0.1.1' "$TMP_DIR/app/docker/docker-compose.yaml"; then
-    fail "docker-compose.yaml missing prebuilt image ghcr.io/dttxorg/livemotion:0.1.1"
+if ! grep -q 'image: ghcr.io/dttxorg/livemotion:0.1.2' "$TMP_DIR/app/docker/docker-compose.yaml"; then
+    fail "docker-compose.yaml missing prebuilt image ghcr.io/dttxorg/livemotion:0.1.2"
 fi
 pass "app.tgz prebuilt-image docker and ui payload validated"
 

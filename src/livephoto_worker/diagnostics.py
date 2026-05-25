@@ -50,6 +50,79 @@ class MotionPhoto2DiagnosticResult:
         }
 
 
+@dataclass(frozen=True)
+class MotionPhoto2Status:
+    available: bool
+    command: list[str]
+    returncode: int | None
+    stdout: str
+    stderr: str
+    error: str = ""
+
+    @property
+    def command_text(self) -> str:
+        return shlex.join(self.command)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "available": self.available,
+            "command": self.command,
+            "command_text": self.command_text,
+            "returncode": self.returncode,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "error": self.error,
+        }
+
+
+def check_motionphoto2_available(settings: Settings) -> MotionPhoto2Status:
+    command = settings.build_motionphoto2_help_command()
+    logger.info("Running MotionPhoto2 startup self-check: %s", shlex.join(command))
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface startup diagnostics in Web UI.
+        stderr = traceback.format_exc()
+        error = f"MotionPhoto2 self-check invocation failed: {exc}"
+        logger.exception("MotionPhoto2 startup self-check invocation failed")
+        return MotionPhoto2Status(
+            available=False,
+            command=command,
+            returncode=None,
+            stdout="",
+            stderr=stderr,
+            error=error,
+        )
+
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    if result.returncode == 0:
+        logger.info("MotionPhoto2 startup self-check passed")
+        return MotionPhoto2Status(
+            available=True,
+            command=command,
+            returncode=result.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    error = f"MotionPhoto2 self-check failed with code {result.returncode}"
+    logger.error("%s; stderr=%s", error, stderr.rstrip())
+    return MotionPhoto2Status(
+        available=False,
+        command=command,
+        returncode=result.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        error=error,
+    )
+
+
 def diagnostic_output_path(
     image_path: Path,
     *,
@@ -74,17 +147,11 @@ def run_motionphoto2_diagnostic(
     image_path = image_path.expanduser()
     video_path = video_path.expanduser()
     output_path = diagnostic_output_path(image_path, output_root=output_root, photos_root=photos_root)
-    command = [
-        settings.motionphoto2_bin,
-        "--input-image",
-        str(image_path),
-        "--input-video",
-        str(video_path),
-        "--output-file",
-        str(output_path),
-    ]
-    if settings.motionphoto2_verbose:
-        command.append("--verbose")
+    command = settings.build_motionphoto2_command(
+        image_path=image_path,
+        video_path=video_path,
+        output_path=output_path,
+    )
 
     image_exists = image_path.is_file()
     video_exists = video_path.is_file()

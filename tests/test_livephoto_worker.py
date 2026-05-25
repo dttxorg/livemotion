@@ -6,7 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from livephoto_worker.diagnostics import MotionPhoto2DiagnosticResult, run_motionphoto2_diagnostic
+from livephoto_worker.diagnostics import (
+    MotionPhoto2DiagnosticResult,
+    MotionPhoto2Status,
+    check_motionphoto2_available,
+    run_motionphoto2_diagnostic,
+)
 from livephoto_worker.db import ProcessingStore
 from livephoto_worker.file_utils import hash_pair
 from livephoto_worker.models import MediaPair
@@ -184,6 +189,45 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertTrue(saved["recursive_scan"])
             self.assertTrue(saved["preserve_directory_structure"])
             self.assertEqual(saved["skip_dir_names"], [".stfolder", "custom-skip"])
+
+    def test_settings_builds_source_motionphoto2_command_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = test_settings(root)
+
+            command = settings.build_motionphoto2_command(
+                image_path=Path("/photos/2026/5/IMG_0056.HEIC"),
+                video_path=Path("/photos/2026/5/IMG_0056.MOV"),
+                output_path=Path("/photos/motion_output/2026/5/IMG_0056.HEIC"),
+            )
+
+            self.assertGreaterEqual(len(command), 8)
+            self.assertEqual(command[0], settings.motionphoto2_python)
+            self.assertEqual(Path(command[1]), settings.motionphoto2_script)
+            self.assertEqual(settings.build_motionphoto2_help_command(), [
+                settings.motionphoto2_python,
+                str(settings.motionphoto2_script),
+                "--help",
+            ])
+            self.assertIn("--input-image", command)
+            self.assertIn("/photos/2026/5/IMG_0056.HEIC", command)
+            self.assertIn("--input-video", command)
+            self.assertIn("/photos/2026/5/IMG_0056.MOV", command)
+            self.assertIn("--output-file", command)
+            self.assertIn("/photos/motion_output/2026/5/IMG_0056.HEIC", command)
+
+    def test_motionphoto2_startup_selfcheck_reports_unavailable(self) -> None:
+        logging.disable(logging.NOTSET)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = create_fake_motionphoto2(root / "motionphoto2", exit_code=9, write_output=False)
+            settings = test_settings(root, motionphoto2_bin=str(fake_bin))
+
+            status = check_motionphoto2_available(settings)
+
+            self.assertFalse(status.available)
+            self.assertEqual(status.returncode, 9)
+            self.assertIn(str(fake_bin), status.command)
 
     def test_scan_pairs_matches_same_stem_and_prefers_heic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -747,11 +791,20 @@ class LivePhotoWorkerTests(unittest.TestCase):
             store = ProcessingStore(settings.db_path)
             fake_worker = FakeWebWorker()
             log_handler = RecentLogHandler()
+            motionphoto2_status = MotionPhoto2Status(
+                available=False,
+                command=["python", "/opt/MotionPhoto2/motionphoto2.py", "--help"],
+                returncode=127,
+                stdout="",
+                stderr="GLIBC_2.38 not found",
+                error="MotionPhoto2 self-check failed",
+            )
             app = create_app(  # type: ignore[misc]
                 settings=settings,
                 worker=fake_worker,  # type: ignore[arg-type]
                 store=store,
                 log_handler=log_handler,
+                motionphoto2_status=motionphoto2_status,
             )
             client = app.test_client()
 
@@ -779,6 +832,8 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("递归扫描".encode(), response.data)
             self.assertIn("保留原目录结构".encode(), response.data)
             self.assertIn("跳过目录列表".encode(), response.data)
+            self.assertIn("MotionPhoto2 不可用".encode(), response.data)
+            self.assertIn("GLIBC_2.38 not found".encode(), response.data)
 
             response = client.post("/save", data={
                 "input_dir": str(root / "photos" / "in"),

@@ -100,7 +100,9 @@ class Settings:
 
     config_path: Path = env_path("CONFIG_PATH", "/config/config.json")
     db_path: Path = env_path("DB_PATH", "/config/livephoto-worker.sqlite3")
-    motionphoto2_bin: str = os.getenv("MOTIONPHOTO2_BIN", "/usr/local/bin/motionphoto2")
+    motionphoto2_python: str = os.getenv("MOTIONPHOTO2_PYTHON", "python")
+    motionphoto2_script: Path = env_path("MOTIONPHOTO2_SCRIPT", "/opt/MotionPhoto2/motionphoto2.py")
+    motionphoto2_bin: str = os.getenv("MOTIONPHOTO2_BIN", "")
     process_timeout_seconds: int = env_int("PROCESS_TIMEOUT_SECONDS", 3600)
     motionphoto2_verbose: bool = env_bool("MOTIONPHOTO2_VERBOSE", False)
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
@@ -188,3 +190,25 @@ class Settings:
             directories.append(self.archive_dir)
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
+
+    def motionphoto2_base_command(self) -> list[str]:
+        if self.motionphoto2_bin:
+            return [self.motionphoto2_bin]
+        return [self.motionphoto2_python, str(self.motionphoto2_script)]
+
+    def build_motionphoto2_command(self, *, image_path: Path, video_path: Path, output_path: Path) -> list[str]:
+        command = [
+            *self.motionphoto2_base_command(),
+            "--input-image",
+            str(image_path),
+            "--input-video",
+            str(video_path),
+            "--output-file",
+            str(output_path),
+        ]
+        if self.motionphoto2_verbose:
+            command.append("--verbose")
+        return command
+
+    def build_motionphoto2_help_command(self) -> list[str]:
+        return [*self.motionphoto2_base_command(), "--help"]

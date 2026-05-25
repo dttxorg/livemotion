@@ -17,12 +17,12 @@ class FpkPackageTests(unittest.TestCase):
         self.assertIn("display_name    = LiveMotion", manifest)
         self.assertIn("service_port    = 8011", manifest)
         self.assertIn("checkport       = false", manifest)
-        self.assertIn("fpk_version     = 0.1.1-r1", manifest)
+        self.assertIn("fpk_version     = 0.1.2-r1", manifest)
         self.assertFalse((FPK_DIR / "manifest.json").exists())
 
         compose = (FPK_DIR / "docker" / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn("build:", compose)
-        self.assertIn("image: ghcr.io/dttxorg/livemotion:0.1.1", compose)
+        self.assertIn("image: ghcr.io/dttxorg/livemotion:0.1.2", compose)
         self.assertNotIn("ghcr.io/your-user", compose)
         self.assertIn("8011:8011", compose)
         self.assertIn("/vol2/photos:/photos", compose)
@@ -84,10 +84,23 @@ class FpkPackageTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("packages: write", workflow)
         self.assertIn("IMAGE_NAME: ghcr.io/dttxorg/livemotion", workflow)
-        self.assertIn("IMAGE_VERSION: 0.1.1", workflow)
+        self.assertIn("IMAGE_VERSION: 0.1.2", workflow)
         self.assertIn("file: ./Dockerfile", workflow)
         self.assertIn("${{ env.IMAGE_NAME }}:${{ env.IMAGE_VERSION }}", workflow)
         self.assertIn("${{ env.IMAGE_NAME }}:latest", workflow)
+
+    def test_dockerfile_installs_motionphoto2_from_source_not_release_binary(self) -> None:
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertNotIn("MotionPhoto2_Linux", dockerfile)
+        self.assertNotIn("releases/download", dockerfile)
+        self.assertNotIn("unzip /tmp/motionphoto2.zip", dockerfile)
+        self.assertIn("git clone --depth 1 --branch", dockerfile)
+        self.assertIn("https://github.com/PetrVys/MotionPhoto2", dockerfile)
+        self.assertIn("MOTIONPHOTO2_SCRIPT=/opt/MotionPhoto2/motionphoto2.py", dockerfile)
+        self.assertIn("libimage-exiftool-perl", dockerfile)
+        self.assertIn("ffmpeg", dockerfile)
+        self.assertIn("python /opt/MotionPhoto2/motionphoto2.py --help", dockerfile)
 
     def test_build_fpk_script_creates_package_with_expected_contents(self) -> None:
         result = subprocess.run(
@@ -123,7 +136,7 @@ class FpkPackageTests(unittest.TestCase):
             self.assertIsNotNone(manifest_file)
             manifest_text = manifest_file.read().decode("utf-8")  # type: ignore[union-attr]
             self.assertRegex(manifest_text, r"checksum\s*=\s*[0-9a-f]{32}")
-            self.assertIn("fpk_version     = 0.1.1-r1", manifest_text)
+            self.assertIn("fpk_version     = 0.1.2-r1", manifest_text)
             app_tgz = package.extractfile("app.tgz")
             self.assertIsNotNone(app_tgz)
             temp_app = ROOT / "dist" / "_test_app_payload.tgz"
