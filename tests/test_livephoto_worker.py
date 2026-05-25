@@ -338,7 +338,19 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             response = client.get("/")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("livephoto-worker 设置".encode(), response.data)
+            self.assertIn("LiveMotion 控制台".encode(), response.data)
+            self.assertIn("Live Photo 输入目录".encode(), response.data)
+            self.assertIn("Motion Photo 输出目录".encode(), response.data)
+            self.assertIn("原始文件归档目录".encode(), response.data)
+            self.assertIn("失败文件目录".encode(), response.data)
+            self.assertIn("文件稳定等待时间（秒）".encode(), response.data)
+            self.assertIn("扫描间隔（秒）".encode(), response.data)
+            self.assertIn("转换后移动原文件".encode(), response.data)
+            self.assertIn("启用归档".encode(), response.data)
+            self.assertIn("已处理文件数".encode(), response.data)
+            self.assertIn("失败文件数".encode(), response.data)
+            self.assertIn("最近处理时间".encode(), response.data)
+            self.assertIn("当前监听目录".encode(), response.data)
 
             response = client.post("/save", data={
                 "input_dir": str(root / "photos" / "in"),
@@ -360,6 +372,65 @@ class LivePhotoWorkerTests(unittest.TestCase):
             response = client.post("/scan")
             self.assertEqual(response.status_code, 302)
             self.assertEqual(fake_worker.scans, 1)
+            store.close()
+
+    @unittest.skipIf(create_app is None, "Flask is not installed")
+    def test_web_logs_stats_and_about_are_productized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = test_settings(root)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            fake_worker = FakeWebWorker()
+            log_handler = RecentLogHandler()
+            log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+            log_handler.emit(logging.LogRecord(
+                name="livephoto_worker.test",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="\x1b[31m转换失败\x1b[0m",
+                args=(),
+                exc_info=None,
+            ))
+            pair = MediaPair("IMG_0001", root / "IMG_0001.HEIC", root / "IMG_0001.MOV")
+            store.record_job(pair, pair_signature="sig-success", status="success", output_path=root / "out.heic", error=None)
+            store.record_job(pair, pair_signature="sig-failed", status="failed", output_path=None, error="bad file")
+            app = create_app(  # type: ignore[misc]
+                settings=settings,
+                worker=fake_worker,  # type: ignore[arg-type]
+                store=store,
+                log_handler=log_handler,
+            )
+            client = app.test_client()
+
+            logs_response = client.get("/logs")
+            self.assertEqual(logs_response.status_code, 200)
+            self.assertIn("查看日志".encode(), logs_response.data)
+            self.assertIn("ERROR".encode(), logs_response.data)
+            self.assertIn("转换失败".encode(), logs_response.data)
+            self.assertNotIn(b"\x1b[31m", logs_response.data)
+            self.assertIn("清空日志".encode(), logs_response.data)
+
+            clear_response = client.post("/logs/clear", follow_redirects=True)
+            self.assertEqual(clear_response.status_code, 200)
+            self.assertIn("日志已清空".encode(), clear_response.data)
+            self.assertIn("暂无日志".encode(), clear_response.data)
+
+            stats_response = client.get("/stats")
+            self.assertEqual(stats_response.status_code, 200)
+            self.assertIn("成功次数".encode(), stats_response.data)
+            self.assertIn("失败次数".encode(), stats_response.data)
+            self.assertIn("今日处理数量".encode(), stats_response.data)
+            self.assertIn("最近处理文件".encode(), stats_response.data)
+            self.assertIn("当前队列数量".encode(), stats_response.data)
+
+            about_response = client.get("/about")
+            self.assertEqual(about_response.status_code, 200)
+            self.assertIn("LiveMotion".encode(), about_response.data)
+            self.assertIn("Version".encode(), about_response.data)
+            self.assertIn("https://github.com/dttxorg/livemotion".encode(), about_response.data)
+            self.assertIn("MotionPhoto2 致谢".encode(), about_response.data)
             store.close()
 
 

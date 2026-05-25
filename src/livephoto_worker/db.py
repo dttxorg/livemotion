@@ -183,9 +183,30 @@ class ProcessingStore:
             ).fetchall()
             total_jobs = self.conn.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()["count"]
             latest = self.conn.execute("SELECT created_at FROM jobs ORDER BY id DESC LIMIT 1").fetchone()
+            success_count = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE status = 'success'"
+            ).fetchone()["count"]
+            failed_count = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE status = 'failed'"
+            ).fetchone()["count"]
+            today_count = self.conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE date(created_at, 'localtime') = date('now', 'localtime')",
+            ).fetchone()["count"]
+            latest_file = self.conn.execute(
+                """
+                SELECT image_name, video_name, output_path, status, created_at
+                FROM jobs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
         return {
             "processed_count": processed_count,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "today_count": today_count,
             "total_jobs": total_jobs,
             "by_status": {row["status"]: row["count"] for row in job_rows},
             "latest_job_at": latest["created_at"] if latest is not None else None,
+            "latest_processed_file": dict(latest_file) if latest_file is not None else None,
         }

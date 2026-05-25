@@ -25,3 +25,7 @@ class RecentLogHandler(logging.Handler):
         if limit <= 0:
             return []
         return records[-limit:]
+
+    def clear(self) -> None:
+        with self.lock:
+            self.records.clear()

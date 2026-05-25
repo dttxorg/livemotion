@@ -1,13 +1,37 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from flask import Flask, redirect, render_template_string, request, url_for
+from flask import Flask, Response, redirect, render_template_string, request, url_for
 
 from .db import ProcessingStore
 from .logging_buffer import RecentLogHandler
 from .settings import Settings
 from .worker import LivePhotoWorker
+
+APP_VERSION = "0.1.0"
+GITHUB_URL = "https://github.com/dttxorg/livemotion"
+COMMON_DIRECTORIES = (
+    "/photos/live_inbox",
+    "/photos/motion_output",
+    "/photos/archive",
+    "/photos/failed",
+)
+STATUS_LABELS = {
+    "success": "成功",
+    "failed": "失败",
+    "skipped_duplicate": "已跳过重复",
+}
+LOG_LEVEL_BADGES = {
+    "DEBUG": "text-bg-secondary",
+    "INFO": "text-bg-info",
+    "WARNING": "text-bg-warning",
+    "ERROR": "text-bg-danger",
+    "CRITICAL": "text-bg-danger",
+}
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+LOG_LEVEL_RE = re.compile(r"\b(DEBUG|INFO|WARNING|ERROR|CRITICAL)\b")
 
 PAGE_TEMPLATE = """
 <!doctype html>
@@ -15,106 +39,376 @@ PAGE_TEMPLATE = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>livephoto-worker 设置</title>
+  <title>{{ title }} - LiveMotion</title>
+  <link rel="icon" href="{{ url_for('favicon') }}" type="image/svg+xml">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; background: #f7f7f8; color: #202124; }
-    main { max-width: 1100px; margin: 0 auto; }
-    h1 { margin-bottom: 0.25rem; }
-    .card { background: white; border: 1px solid #ddd; border-radius: 12px; padding: 1.25rem; margin: 1rem 0; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    .grid { display: grid; grid-template-columns: minmax(180px, 240px) 1fr; gap: 0.75rem 1rem; align-items: center; }
-    label { font-weight: 600; }
-    input[type="text"], input[type="number"] { width: 100%; box-sizing: border-box; padding: 0.55rem; border: 1px solid #c8c8c8; border-radius: 8px; font-size: 1rem; }
-    input[type="checkbox"] { transform: scale(1.2); }
-    button, .button { display: inline-block; border: 0; border-radius: 8px; background: #2563eb; color: white; padding: 0.65rem 1rem; font-size: 1rem; cursor: pointer; text-decoration: none; margin-right: 0.5rem; }
-    button.secondary, .button.secondary { background: #4b5563; }
-    .message { border-left: 4px solid #16a34a; background: #ecfdf5; padding: 0.75rem 1rem; border-radius: 8px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid #e5e7eb; text-align: left; padding: 0.5rem; vertical-align: top; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #111827; color: #e5e7eb; border-radius: 8px; padding: 1rem; max-height: 420px; overflow: auto; }
-    .muted { color: #6b7280; }
+    :root {
+      --lm-bg: #f3f5f7;
+      --lm-panel: #ffffff;
+      --lm-border: #e5e7eb;
+      --lm-text: #111827;
+      --lm-muted: #6b7280;
+      --lm-nav: #111827;
+      --lm-accent: #2563eb;
+      --lm-accent-soft: #e8f0ff;
+    }
+    body {
+      min-height: 100vh;
+      background: radial-gradient(circle at top left, #eef4ff 0, #f6f7f9 28rem, var(--lm-bg) 100%);
+      color: var(--lm-text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    .app-navbar {
+      background: rgba(17, 24, 39, 0.96);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+    }
+    .brand-mark {
+      width: 2.25rem;
+      height: 2.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0.85rem;
+      background: linear-gradient(135deg, #60a5fa, #2563eb);
+      color: #fff;
+      font-size: 1.15rem;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.28);
+    }
+    .page-shell { max-width: 1240px; }
+    .hero-card {
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 1.35rem;
+      background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+    }
+    .section-card {
+      border: 1px solid var(--lm-border);
+      border-radius: 1.15rem;
+      background: var(--lm-panel);
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+    .metric-card {
+      border: 1px solid #e7edf5;
+      border-radius: 1rem;
+      padding: 1rem;
+      background: #fbfdff;
+      min-height: 7.25rem;
+    }
+    .metric-label { color: var(--lm-muted); font-size: .88rem; }
+    .metric-value { font-size: 1.8rem; font-weight: 800; letter-spacing: -.03em; }
+    .metric-small { color: var(--lm-muted); font-size: .85rem; overflow-wrap: anywhere; }
+    .config-label { font-weight: 650; color: #263244; }
+    .form-control, .form-check-input { border-color: #d5dbe5; }
+    .form-control:focus, .form-check-input:focus {
+      border-color: #8bb7ff;
+      box-shadow: 0 0 0 .2rem rgba(37, 99, 235, .12);
+    }
+    .quick-dir button {
+      --bs-btn-padding-y: .22rem;
+      --bs-btn-padding-x: .55rem;
+      --bs-btn-font-size: .78rem;
+    }
+    .table thead th { color: #526071; font-size: .82rem; text-transform: none; white-space: nowrap; }
+    .text-path { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88rem; }
+    .log-panel {
+      max-height: 34rem;
+      overflow: auto;
+      border: 1px solid #dbe3ee;
+      border-radius: 1rem;
+      background: #0f172a;
+      padding: .4rem;
+    }
+    .log-row {
+      display: grid;
+      grid-template-columns: 5.75rem 1fr;
+      gap: .75rem;
+      align-items: start;
+      color: #dbeafe;
+      padding: .55rem .7rem;
+      border-bottom: 1px solid rgba(148, 163, 184, .15);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .86rem;
+    }
+    .log-row:last-child { border-bottom: 0; }
+    .log-message { white-space: pre-wrap; word-break: break-word; }
+    .empty-state {
+      border: 1px dashed #cad4e2;
+      border-radius: 1rem;
+      color: var(--lm-muted);
+      background: #f8fafc;
+      padding: 1.2rem;
+      text-align: center;
+    }
+    .about-logo {
+      width: 5rem;
+      height: 5rem;
+      border-radius: 1.5rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #60a5fa, #1d4ed8);
+      color: #fff;
+      font-size: 2.5rem;
+      box-shadow: 0 16px 36px rgba(37, 99, 235, .24);
+    }
+    .muted { color: var(--lm-muted); }
   </style>
 </head>
 <body>
-<main>
-  <h1>livephoto-worker 设置</h1>
-  <p class="muted">配置文件：{{ settings.config_path }}</p>
-  {% if message %}<p class="message">{{ message }}</p>{% endif %}
+<nav class="navbar navbar-expand-lg navbar-dark app-navbar sticky-top">
+  <div class="container-fluid page-shell py-1">
+    <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="{{ url_for('index') }}">
+      <span class="brand-mark">▶</span>
+      <span>LiveMotion</span>
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#topNav" aria-controls="topNav" aria-expanded="false" aria-label="切换导航">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div id="topNav" class="collapse navbar-collapse">
+      <ul class="navbar-nav ms-auto gap-lg-1">
+        <li class="nav-item"><a class="nav-link {% if page == 'dashboard' %}active{% endif %}" href="{{ url_for('index') }}">控制台</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'stats' %}active{% endif %}" href="{{ url_for('stats_page') }}">查看统计</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'logs' %}active{% endif %}" href="{{ url_for('logs_page') }}">查看日志</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'about' %}active{% endif %}" href="{{ url_for('about_page') }}">关于</a></li>
+      </ul>
+    </div>
+  </div>
+</nav>
 
-  <section class="card">
-    <h2>配置</h2>
-    <form method="post" action="{{ url_for('save_config') }}">
-      <div class="grid">
-        <label for="input_dir">input_dir</label>
-        <input id="input_dir" name="input_dir" type="text" value="{{ settings.input_dir }}" required>
+<main class="container-fluid page-shell py-4 py-lg-5">
+  {% if message %}
+  <div class="alert alert-success border-0 shadow-sm rounded-4" role="status">{{ message }}</div>
+  {% endif %}
 
-        <label for="output_dir">output_dir</label>
-        <input id="output_dir" name="output_dir" type="text" value="{{ settings.output_dir }}" required>
-
-        <label for="archive_dir">archive_dir</label>
-        <input id="archive_dir" name="archive_dir" type="text" value="{{ settings.archive_dir }}" required>
-
-        <label for="failed_dir">failed_dir</label>
-        <input id="failed_dir" name="failed_dir" type="text" value="{{ settings.failed_dir }}" required>
-
-        <label for="stable_seconds">stable_seconds</label>
-        <input id="stable_seconds" name="stable_seconds" type="number" min="0" step="0.1" value="{{ settings.stable_seconds }}" required>
-
-        <label for="poll_interval">poll_interval</label>
-        <input id="poll_interval" name="poll_interval" type="number" min="1" step="0.1" value="{{ settings.poll_interval }}" required>
-
-        <label for="move_originals">move_originals</label>
-        <input id="move_originals" name="move_originals" type="checkbox" value="1" {% if settings.move_originals %}checked{% endif %}>
-
-        <label for="enable_archive">enable_archive</label>
-        <input id="enable_archive" name="enable_archive" type="checkbox" value="1" {% if settings.enable_archive %}checked{% endif %}>
+  {% if page == 'dashboard' %}
+  <section class="hero-card p-4 p-lg-5 mb-4">
+    <div class="row align-items-center g-4">
+      <div class="col-lg-8">
+        <div class="d-flex align-items-center gap-3 mb-3">
+          <span class="brand-mark" style="width:3rem;height:3rem;font-size:1.45rem;">▶</span>
+          <div>
+            <p class="text-primary fw-semibold mb-1">Live Photo 自动转换服务</p>
+            <h1 class="display-6 fw-bold mb-0">LiveMotion 控制台</h1>
+          </div>
+        </div>
+        <p class="lead text-secondary mb-0">监听输入目录，自动合成 Google Photos 可识别的 Motion Photo，并归档原始文件。</p>
       </div>
-      <p style="margin-top: 1rem;"><button type="submit">保存配置</button></p>
-    </form>
+      <div class="col-lg-4 text-lg-end">
+        <form method="post" action="{{ url_for('scan_now') }}" class="d-inline">
+          <button type="submit" class="btn btn-primary btn-lg rounded-3">⚡ 立即扫描</button>
+        </form>
+        <a class="btn btn-outline-secondary btn-lg rounded-3 ms-2" href="{{ url_for('logs_page') }}">查看日志</a>
+      </div>
+    </div>
   </section>
 
-  <section class="card">
-    <h2>操作</h2>
-    <form method="post" action="{{ url_for('scan_now') }}" style="display: inline;"><button type="submit">立即扫描一次</button></form>
-    <a class="button secondary" href="#logs">查看最近日志</a>
-    <a class="button secondary" href="#stats">查看处理统计</a>
+  <section class="section-card p-4 mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="section-title">📡 系统状态</h2>
+      <span class="badge text-bg-success rounded-pill px-3 py-2">运行中</span>
+    </div>
+    <div class="row g-3">
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">已处理文件数</div><div class="metric-value">{{ stats.processed_count }}</div><div class="metric-small">已成功去重的文件对</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败文件数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">需要人工检查</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">最近处理时间</div><div class="metric-value fs-6 mt-2">{{ stats.latest_job_at or '暂无记录' }}</div><div class="metric-small">任务记录更新时间</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前监听目录</div><div class="metric-value fs-6 mt-2 text-path">{{ settings.input_dir }}</div><div class="metric-small">当前队列数量：{{ queue_count }}</div></div></div>
+    </div>
   </section>
 
-  <section id="stats" class="card">
-    <h2>处理统计</h2>
-    <table>
-      <tr><th>已成功处理去重文件对</th><td>{{ stats.processed_count }}</td></tr>
-      <tr><th>任务记录总数</th><td>{{ stats.total_jobs }}</td></tr>
-      <tr><th>最近任务时间</th><td>{{ stats.latest_job_at or '-' }}</td></tr>
-      <tr><th>按状态统计</th><td>{{ stats.by_status }}</td></tr>
-    </table>
-    <h3>最近任务</h3>
-    <table>
-      <thead><tr><th>时间</th><th>状态</th><th>图片</th><th>视频</th><th>输出/错误</th></tr></thead>
-      <tbody>
-        {% for job in recent_jobs %}
-        <tr>
-          <td>{{ job.created_at }}</td>
-          <td>{{ job.status }}</td>
-          <td>{{ job.image_name }}</td>
-          <td>{{ job.video_name }}</td>
-          <td>{% if job.error %}{{ job.error }}{% else %}{{ job.output_path or '-' }}{% endif %}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="muted">暂无任务记录</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <section class="section-card p-4 mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 class="section-title">⚙️ 当前配置</h2>
+      <span class="text-secondary small">配置文件：<span class="text-path">{{ settings.config_path }}</span></span>
+    </div>
+    {{ config_form|safe }}
   </section>
 
-  <section id="logs" class="card">
-    <h2>最近日志</h2>
-    <pre>{% for line in logs %}{{ line }}
-{% else %}暂无日志{% endfor %}</pre>
+  <div class="row g-4">
+    <div class="col-xl-7">
+      <section class="section-card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="section-title">🧾 最近任务</h2>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('stats_page') }}">查看统计</a>
+        </div>
+        {{ jobs_table|safe }}
+      </section>
+    </div>
+    <div class="col-xl-5">
+      <section class="section-card p-4 h-100">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="section-title">📜 最近日志</h2>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('logs_page') }}">查看日志</a>
+        </div>
+        {{ logs_panel|safe }}
+      </section>
+    </div>
+  </div>
+  {% elif page == 'logs' %}
+  <section class="section-card p-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between gap-3 align-items-md-center mb-3">
+      <div>
+        <h1 class="h3 fw-bold mb-1">📜 查看日志</h1>
+        <p class="text-secondary mb-0">显示最近运行日志，已自动过滤 ANSI 颜色转义字符。</p>
+      </div>
+      <form method="post" action="{{ url_for('clear_logs') }}">
+        <button type="submit" class="btn btn-outline-danger rounded-3">清空日志</button>
+      </form>
+    </div>
+    {{ logs_panel|safe }}
   </section>
+  {% elif page == 'stats' %}
+  <section class="section-card p-4 mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <h1 class="h3 fw-bold mb-1">📊 查看统计</h1>
+        <p class="text-secondary mb-0">转换结果、今日任务与最近处理文件。</p>
+      </div>
+      <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary rounded-3">立即扫描</button></form>
+    </div>
+    <div class="row g-3">
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">成功次数</div><div class="metric-value text-success">{{ stats.success_count }}</div><div class="metric-small">成功合成 Motion Photo</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">失败次数</div><div class="metric-value text-danger">{{ stats.failed_count }}</div><div class="metric-small">失败文件会移动到失败目录</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">今日处理数量</div><div class="metric-value">{{ stats.today_count }}</div><div class="metric-small">按 NAS 本地日期统计</div></div></div>
+      <div class="col-md-6 col-xl-3"><div class="metric-card"><div class="metric-label">当前队列数量</div><div class="metric-value">{{ queue_count }}</div><div class="metric-small">等待稳定窗口的文件对</div></div></div>
+    </div>
+  </section>
+  <section class="section-card p-4 mb-4">
+    <h2 class="section-title mb-3">📁 最近处理文件</h2>
+    {% if stats.latest_processed_file %}
+    <div class="row g-3">
+      <div class="col-md-6"><div class="metric-card"><div class="metric-label">图片文件</div><div class="metric-small text-path mt-2">{{ stats.latest_processed_file.image_name }}</div></div></div>
+      <div class="col-md-6"><div class="metric-card"><div class="metric-label">视频文件</div><div class="metric-small text-path mt-2">{{ stats.latest_processed_file.video_name }}</div></div></div>
+      <div class="col-12"><div class="metric-card"><div class="metric-label">输出路径 / 状态</div><div class="metric-small text-path mt-2">{{ stats.latest_processed_file.output_path or stats.latest_processed_file.status }}</div></div></div>
+    </div>
+    {% else %}
+    <div class="empty-state">暂无处理记录</div>
+    {% endif %}
+  </section>
+  <section class="section-card p-4">{{ jobs_table|safe }}</section>
+  {% elif page == 'about' %}
+  <section class="section-card p-5 text-center">
+    <div class="about-logo mb-3">▶</div>
+    <h1 class="fw-bold">LiveMotion</h1>
+    <p class="text-secondary fs-5">Live Photo 到 Google Motion Photo 的 NAS 自动化转换应用</p>
+    <div class="row g-3 mt-4 text-start">
+      <div class="col-md-6"><div class="metric-card"><div class="metric-label">Version</div><div class="metric-value fs-4">{{ app_version }}</div></div></div>
+      <div class="col-md-6"><div class="metric-card"><div class="metric-label">GitHub 地址</div><div class="metric-small mt-2"><a href="{{ github_url }}" target="_blank" rel="noreferrer">{{ github_url }}</a></div></div></div>
+      <div class="col-12"><div class="metric-card"><div class="metric-label">MotionPhoto2 致谢</div><div class="metric-small mt-2">LiveMotion 调用 MotionPhoto2 完成 Motion Photo 合成，感谢 MotionPhoto2 项目提供核心合成能力。</div></div></div>
+    </div>
+  </section>
+  {% endif %}
 </main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  document.querySelectorAll('[data-dir-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = document.getElementById(button.dataset.dirTarget);
+      if (target) {
+        target.value = button.dataset.dirValue || '';
+        target.focus();
+      }
+    });
+  });
+</script>
 </body>
 </html>
 """
+
+CONFIG_FORM_TEMPLATE = """
+<form method="post" action="{{ url_for('save_config') }}">
+  <div class="row g-4">
+    {% for field in dir_fields %}
+    <div class="col-lg-6">
+      <label class="form-label config-label" for="{{ field.name }}">{{ field.label }}</label>
+      <input class="form-control" id="{{ field.name }}" name="{{ field.name }}" type="text" value="{{ field.value }}" required>
+      <div class="quick-dir d-flex flex-wrap gap-2 mt-2" aria-label="{{ field.label }}快捷目录">
+        {% for directory in common_directories %}
+        <button type="button" class="btn btn-light border" data-dir-target="{{ field.name }}" data-dir-value="{{ directory }}">{{ directory }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    <div class="col-md-6">
+      <label class="form-label config-label" for="stable_seconds">文件稳定等待时间（秒）</label>
+      <input class="form-control" id="stable_seconds" name="stable_seconds" type="number" min="0" step="0.1" value="{{ settings.stable_seconds }}" required>
+    </div>
+    <div class="col-md-6">
+      <label class="form-label config-label" for="poll_interval">扫描间隔（秒）</label>
+      <input class="form-control" id="poll_interval" name="poll_interval" type="number" min="1" step="0.1" value="{{ settings.poll_interval }}" required>
+    </div>
+    <div class="col-md-6">
+      <div class="form-check form-switch p-3 rounded-4 border bg-light h-100">
+        <input class="form-check-input ms-0 me-2" id="move_originals" name="move_originals" type="checkbox" value="1" {% if settings.move_originals %}checked{% endif %}>
+        <label class="form-check-label fw-semibold" for="move_originals">转换后移动原文件</label>
+        <div class="text-secondary small mt-1">关闭后，原始 HEIC/JPG 与 MOV 会保留在输入目录。</div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="form-check form-switch p-3 rounded-4 border bg-light h-100">
+        <input class="form-check-input ms-0 me-2" id="enable_archive" name="enable_archive" type="checkbox" value="1" {% if settings.enable_archive %}checked{% endif %}>
+        <label class="form-check-label fw-semibold" for="enable_archive">启用归档</label>
+        <div class="text-secondary small mt-1">开启后，成功转换的原始文件会移动到归档目录。</div>
+      </div>
+    </div>
+  </div>
+  <div class="d-flex flex-wrap gap-2 mt-4">
+    <button type="submit" class="btn btn-primary rounded-3">保存配置</button>
+    <a class="btn btn-outline-secondary rounded-3" href="{{ url_for('logs_page') }}">查看日志</a>
+    <a class="btn btn-outline-secondary rounded-3" href="{{ url_for('stats_page') }}">查看统计</a>
+  </div>
+</form>
+"""
+
+JOBS_TABLE_TEMPLATE = """
+{% if recent_jobs %}
+<div class="table-responsive">
+  <table class="table align-middle mb-0">
+    <thead><tr><th>时间</th><th>状态</th><th>图片</th><th>视频</th><th>输出 / 错误</th></tr></thead>
+    <tbody>
+      {% for job in recent_jobs %}
+      <tr>
+        <td class="text-secondary small text-nowrap">{{ job.created_at }}</td>
+        <td><span class="badge {{ status_badge(job.status) }}">{{ status_label(job.status) }}</span></td>
+        <td class="text-path">{{ job.image_name }}</td>
+        <td class="text-path">{{ job.video_name }}</td>
+        <td class="text-path {% if job.error %}text-danger{% endif %}">{{ job.error or job.output_path or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">暂无任务记录</div>
+{% endif %}
+"""
+
+LOGS_PANEL_TEMPLATE = """
+{% if log_entries %}
+<div class="log-panel" role="log" aria-label="最近日志">
+  {% for entry in log_entries %}
+  <div class="log-row">
+    <div><span class="badge {{ entry.badge_class }}">{{ entry.level }}</span></div>
+    <div class="log-message">{{ entry.message }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">暂无日志</div>
+{% endif %}
+"""
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#2563eb"/><path d="M25 18l23 14-23 14z" fill="#fff"/><circle cx="20" cy="20" r="5" fill="#93c5fd"/></svg>"""
 
 
 def _form_to_config(form: Any) -> dict[str, Any]:
@@ -130,6 +424,58 @@ def _form_to_config(form: Any) -> dict[str, Any]:
     }
 
 
+def _strip_ansi(value: str) -> str:
+    return ANSI_RE.sub("", value)
+
+
+def _log_entries(logs: list[str]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for line in logs:
+        clean = _strip_ansi(line)
+        match = LOG_LEVEL_RE.search(clean)
+        level = match.group(1) if match else "INFO"
+        entries.append({
+            "level": level,
+            "badge_class": LOG_LEVEL_BADGES.get(level, "text-bg-secondary"),
+            "message": clean,
+        })
+    return entries
+
+
+def _status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status)
+
+
+def _status_badge(status: str) -> str:
+    if status == "success":
+        return "text-bg-success"
+    if status == "failed":
+        return "text-bg-danger"
+    if status == "skipped_duplicate":
+        return "text-bg-secondary"
+    return "text-bg-info"
+
+
+def _queue_count(worker: LivePhotoWorker) -> int:
+    pending = getattr(worker, "pending", None)
+    if pending is None:
+        return 0
+    scan_lock = getattr(worker, "scan_lock", None)
+    if scan_lock is None:
+        return len(pending)
+    with scan_lock:
+        return len(pending)
+
+
+def _dir_fields(settings: Settings) -> list[dict[str, str]]:
+    return [
+        {"name": "input_dir", "label": "Live Photo 输入目录", "value": str(settings.input_dir)},
+        {"name": "output_dir", "label": "Motion Photo 输出目录", "value": str(settings.output_dir)},
+        {"name": "archive_dir", "label": "原始文件归档目录", "value": str(settings.archive_dir)},
+        {"name": "failed_dir", "label": "失败文件目录", "value": str(settings.failed_dir)},
+    ]
+
+
 def create_app(
     *,
     settings: Settings,
@@ -139,16 +485,64 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
 
-    @app.get("/")
-    def index() -> str:
+    def render_page(page: str, title: str, *, message: str = "") -> str:
+        stats = store.stats()
+        recent_jobs = store.recent_jobs(limit=20)
+        log_entries = _log_entries(log_handler.recent(limit=120))
+        config_form = render_template_string(
+            CONFIG_FORM_TEMPLATE,
+            settings=settings,
+            dir_fields=_dir_fields(settings),
+            common_directories=COMMON_DIRECTORIES,
+        )
+        jobs_table = render_template_string(
+            JOBS_TABLE_TEMPLATE,
+            recent_jobs=recent_jobs,
+            status_label=_status_label,
+            status_badge=_status_badge,
+        )
+        logs_panel = render_template_string(LOGS_PANEL_TEMPLATE, log_entries=log_entries)
         return render_template_string(
             PAGE_TEMPLATE,
+            page=page,
+            title=title,
             settings=settings,
-            stats=store.stats(),
-            recent_jobs=store.recent_jobs(limit=20),
-            logs=log_handler.recent(limit=120),
-            message=request.args.get("message", ""),
+            stats=stats,
+            recent_jobs=recent_jobs,
+            log_entries=log_entries,
+            config_form=config_form,
+            jobs_table=jobs_table,
+            logs_panel=logs_panel,
+            queue_count=_queue_count(worker),
+            app_version=APP_VERSION,
+            github_url=GITHUB_URL,
+            message=message,
         )
+
+    @app.get("/")
+    def index() -> str:
+        return render_page("dashboard", "控制台", message=request.args.get("message", ""))
+
+    @app.get("/logs")
+    def logs_page() -> str:
+        return render_page("logs", "查看日志", message=request.args.get("message", ""))
+
+    @app.post("/logs/clear")
+    def clear_logs():  # type: ignore[no-untyped-def]
+        log_handler.clear()
+        return redirect(url_for("logs_page", message="日志已清空"))
+
+    @app.get("/stats")
+    def stats_page() -> str:
+        return render_page("stats", "查看统计", message=request.args.get("message", ""))
+
+    @app.get("/about")
+    def about_page() -> str:
+        return render_page("about", "关于")
+
+    @app.get("/favicon.svg")
+    def favicon() -> Response:
+        return Response(FAVICON_SVG, mimetype="image/svg+xml")
 
     @app.post("/save")
     def save_config():  # type: ignore[no-untyped-def]
@@ -160,7 +554,7 @@ def create_app(
     @app.post("/scan")
     def scan_now():  # type: ignore[no-untyped-def]
         processed_count = worker.scan_once()
-        return redirect(url_for("index", message=f"已立即扫描一次，本轮处理 {processed_count} 对文件"))
+        return redirect(url_for("index", message=f"已立即扫描，本轮处理 {processed_count} 对文件"))
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

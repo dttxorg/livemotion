@@ -57,8 +57,10 @@ def main() -> int:
 
     worker_thread.start()
     try:
-        logger.info("Starting Web UI on %s:%s", settings.web_host, settings.web_port)
-        app.run(host=settings.web_host, port=settings.web_port, threaded=True, use_reloader=False)
+        from waitress import serve
+
+        logger.info("Starting production Web UI on %s:%s", settings.web_host, settings.web_port)
+        serve(app, host=settings.web_host, port=settings.web_port, threads=8)
     finally:
         worker.stop()
         worker_thread.join(timeout=5)
