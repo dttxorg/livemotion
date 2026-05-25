@@ -1,5 +1,5 @@
 appname         = livemotion
-version         = 0.1.0
+version         = 0.1.1
 display_name    = LiveMotion
 platform        = x86
 maintainer      = LiveMotion Contributors
@@ -13,4 +13,4 @@ checkport       = false
 desc            = Live Photo 转 Google Motion Photo 的 Web 配置 Docker Worker。
 source          = thirdparty
 checksum        = 
-fpk_version     = 0.1.0-r1
+fpk_version     = 0.1.1-r1

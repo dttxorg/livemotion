@@ -13,7 +13,7 @@ from .logging_buffer import RecentLogHandler
 from .settings import Settings
 from .worker import LivePhotoWorker
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 GITHUB_URL = "https://github.com/dttxorg/livemotion"
 COMMON_DIRECTORIES = (
     "/photos/live_inbox",

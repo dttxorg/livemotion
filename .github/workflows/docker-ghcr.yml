@@ -12,7 +12,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/dttxorg/livemotion
-  IMAGE_VERSION: 0.1.0
+  IMAGE_VERSION: 0.1.1
 
 jobs:
   docker:

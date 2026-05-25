@@ -245,7 +245,7 @@ app.tgz
 `fpk/docker/docker-compose.yaml` 使用预构建镜像，不在飞牛本机 build：
 
 ```yaml
-image: ghcr.io/dttxorg/livemotion:0.1.0
+image: ghcr.io/dttxorg/livemotion:0.1.1
 ports:
   - "8011:8011"
 volumes:
@@ -284,7 +284,7 @@ volumes:
 FPK 不再在飞牛 NAS 上执行 Docker build；飞牛只会拉取预构建镜像：
 
 ```text
-ghcr.io/dttxorg/livemotion:0.1.0
+ghcr.io/dttxorg/livemotion:0.1.1
 ```
 
 已提供 GitHub Actions workflow：
@@ -300,7 +300,7 @@ ghcr.io/dttxorg/livemotion:0.1.0
 
 推送 tag：
 
-- `ghcr.io/dttxorg/livemotion:0.1.0`
+- `ghcr.io/dttxorg/livemotion:0.1.1`
 - `ghcr.io/dttxorg/livemotion:latest`
 
 #### 1. 创建 GitHub 仓库
@@ -352,7 +352,7 @@ git remote set-url origin git@github.com:dttxorg/livemotion.git
 3. 找到 `Build and publish Docker image` workflow。
 4. 打开最新一次运行，确认所有步骤成功。
 5. 成功后 GHCR 应出现以下镜像 tag：
-   - `ghcr.io/dttxorg/livemotion:0.1.0`
+   - `ghcr.io/dttxorg/livemotion:0.1.1`
    - `ghcr.io/dttxorg/livemotion:latest`
 
 也可以在 `Actions` 页面点击 `Run workflow` 手动触发一次构建。
@@ -364,7 +364,7 @@ GitHub Actions 成功后：
 1. 打开 `https://github.com/dttxorg`。
 2. 点击 `Packages`。
 3. 找到 `livemotion` package。
-4. 打开 package 详情页，确认存在 `0.1.0` 和 `latest` tag。
+4. 打开 package 详情页，确认存在 `0.1.1` 和 `latest` tag。
 
 #### 5. 将 GHCR Package 设置为 Public
 
@@ -420,8 +420,8 @@ export GHCR_TOKEN="粘贴你的 GitHub PAT"
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u dttxorg --password-stdin
-docker build -t ghcr.io/dttxorg/livemotion:0.1.0 -t ghcr.io/dttxorg/livemotion:latest .
-docker push ghcr.io/dttxorg/livemotion:0.1.0
+docker build -t ghcr.io/dttxorg/livemotion:0.1.1 -t ghcr.io/dttxorg/livemotion:latest .
+docker push ghcr.io/dttxorg/livemotion:0.1.1
 docker push ghcr.io/dttxorg/livemotion:latest
 ```
 
@@ -430,13 +430,13 @@ docker push ghcr.io/dttxorg/livemotion:latest
 本地验证：
 
 ```bash
-docker pull ghcr.io/dttxorg/livemotion:0.1.0
+docker pull ghcr.io/dttxorg/livemotion:0.1.1
 ```
 
 飞牛 NAS / Debian 上验证：
 
 ```bash
-docker pull ghcr.io/dttxorg/livemotion:0.1.0
+docker pull ghcr.io/dttxorg/livemotion:0.1.1
 ```
 
 #### 9. 重新生成并安装 FPK
@@ -503,5 +503,5 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 正确镜像名应为：
 
 ```text
-ghcr.io/dttxorg/livemotion:0.1.0
+ghcr.io/dttxorg/livemotion:0.1.1
 ```
