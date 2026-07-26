@@ -4,6 +4,7 @@ import json
 import logging
 import tempfile
 import unittest
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from livephoto_worker.diagnostics import (
@@ -143,6 +144,45 @@ def test_settings(root: Path, **overrides) -> Settings:
     )
     defaults.update(overrides)
     return Settings(**defaults)
+
+
+def record_job_for_local_day(
+    store: ProcessingStore,
+    *,
+    day: date,
+    status: str,
+    hour: int = 12,
+    minute: int = 0,
+) -> None:
+    """Insert a fixture job whose SQLite local date is ``day``."""
+    local_timezone = datetime.now().astimezone().tzinfo or timezone.utc
+    created_at = datetime(
+        day.year,
+        day.month,
+        day.day,
+        hour,
+        minute,
+        tzinfo=local_timezone,
+    ).astimezone(timezone.utc).isoformat(timespec="seconds")
+    with store.lock, store.conn:
+        store.conn.execute(
+            """
+            INSERT INTO jobs (
+                pair_signature, stem, image_name, video_name,
+                status, output_path, error, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                None,
+                f"fixture-{status}-{day.isoformat()}-{hour:02d}{minute:02d}",
+                "fixture.HEIC",
+                "fixture.MOV",
+                status,
+                None,
+                None,
+                created_at,
+            ),
+        )
 
 
 class LivePhotoWorkerTests(unittest.TestCase):
@@ -886,8 +926,51 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("MotionPhoto2 exited with code 3", latest["error"])
             store.close()
 
+    def test_store_seven_day_trend_groups_statuses_zero_fills_and_respects_local_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = ProcessingStore(test_settings(root).db_path)
+            end_day = date(2042, 4, 20)
+            first_day = end_day - timedelta(days=6)
+
+            # The first and last days are both inclusive.  The local timestamps
+            # exercise SQLite's date(..., 'localtime') grouping boundary.
+            record_job_for_local_day(store, day=first_day, status="success", hour=0, minute=1)
+            record_job_for_local_day(store, day=first_day, status="failed", hour=23, minute=59)
+            record_job_for_local_day(store, day=end_day, status="copied_photo", hour=0, minute=1)
+            record_job_for_local_day(store, day=end_day, status="copied_video", hour=23, minute=59)
+            record_job_for_local_day(store, day=end_day, status="skipped_duplicate", hour=12)
+            record_job_for_local_day(
+                store,
+                day=first_day - timedelta(days=1),
+                status="failed",
+                hour=23,
+                minute=59,
+            )
+
+            trend = store.seven_day_trend(days=7, end_date=end_day)
+
+            self.assertEqual(
+                [point["date"] for point in trend],
+                [(first_day + timedelta(days=offset)).isoformat() for offset in range(7)],
+            )
+            self.assertEqual(trend[0]["completed"], 1)
+            self.assertEqual(trend[0]["failed"], 1)
+            self.assertEqual(trend[1]["completed"], 0)
+            self.assertEqual(trend[1]["failed"], 0)
+            self.assertEqual(trend[-1]["completed"], 2)
+            self.assertEqual(trend[-1]["failed"], 0)
+            self.assertEqual(trend[-1]["label"], "4/20")
+            stats = store.stats()
+            self.assertEqual(stats["completed_count"], 3)
+            self.assertEqual(stats["failed_count"], 2)
+            self.assertEqual(len(stats["seven_day_trend"]), 7)
+            with self.assertRaises(ValueError):
+                store.seven_day_trend(days=0, end_date=end_day)
+            store.close()
+
     @unittest.skipIf(create_app is None, "Flask is not installed")
-    def test_web_page_saves_config_and_triggers_scan(self) -> None:
+    def test_web_dashboard_settings_and_scan_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             settings = test_settings(root)
@@ -903,6 +986,9 @@ class LivePhotoWorkerTests(unittest.TestCase):
                 stderr="GLIBC_2.38 not found",
                 error="MotionPhoto2 self-check failed",
             )
+            pair = MediaPair("IMG_0001", root / "IMG_0001.HEIC", root / "IMG_0001.MOV")
+            store.record_job(pair, pair_signature="sig-success", status="success", output_path=root / "out.heic", error=None)
+            store.record_job(pair, pair_signature="sig-failed", status="failed", output_path=None, error="bad file")
             app = create_app(  # type: ignore[misc]
                 settings=settings,
                 worker=fake_worker,  # type: ignore[arg-type]
@@ -914,30 +1000,43 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             response = client.get("/")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("LiveMotion 控制台".encode(), response.data)
-            self.assertIn("Live Photo 输入目录".encode(), response.data)
-            self.assertIn("Pixel 同步输出目录".encode(), response.data)
-            self.assertIn("Pixel 只需要同步此输出目录。".encode(), response.data)
-            self.assertIn("原始文件归档目录".encode(), response.data)
-            self.assertIn("失败文件目录".encode(), response.data)
-            self.assertIn("文件稳定等待时间（秒）".encode(), response.data)
-            self.assertIn("扫描间隔（秒）".encode(), response.data)
-            self.assertIn("转换后移动原文件".encode(), response.data)
-            self.assertIn("启用归档".encode(), response.data)
-            self.assertIn("已处理文件数".encode(), response.data)
-            self.assertIn("失败文件数".encode(), response.data)
-            self.assertIn("最近处理时间".encode(), response.data)
-            self.assertIn("当前监听目录".encode(), response.data)
-            self.assertIn("等待稳定的文件数".encode(), response.data)
-            self.assertIn("等待稳定的 Live Photo 数".encode(), response.data)
-            self.assertIn("当前最早等待时间".encode(), response.data)
-            self.assertIn("下次预计处理时间".encode(), response.data)
-            self.assertIn("首次扫描大目录时，建议使用强制扫描。".encode(), response.data)
-            self.assertIn("递归扫描".encode(), response.data)
-            self.assertIn("保留原目录结构".encode(), response.data)
-            self.assertIn("跳过目录列表".encode(), response.data)
+            self.assertIn(b"bootstrap@5.3.3", response.data)
+            self.assertIn(b"/static/dashboard.css", response.data)
+            for label in ("控制台", "设置", "任务记录", "日志", "高级工具", "关于"):
+                self.assertIn(label.encode(), response.data)
+            for label in ("运行概览", "运行健康", "今日完成", "今日失败", "等待稳定", "最近活动", "7 天趋势", "最近任务"):
+                self.assertIn(label.encode(), response.data)
+            self.assertIn("立即扫描".encode(), response.data)
+            self.assertIn("强制扫描会跳过稳定等待".encode(), response.data)
+            self.assertEqual(response.data.count(b'class="trend-day"'), 7)
+            self.assertNotIn("Live Photo 输入目录".encode(), response.data)
             self.assertIn("MotionPhoto2 不可用".encode(), response.data)
             self.assertIn("GLIBC_2.38 not found".encode(), response.data)
+
+            settings_response = client.get("/settings")
+            self.assertEqual(settings_response.status_code, 200)
+            self.assertIn(b'data-page="settings"', settings_response.data)
+            for label in (
+                "目录与同步",
+                "扫描节奏",
+                "文件处理",
+                "扫描排除",
+                "Live Photo 输入目录",
+                "Pixel 同步输出目录",
+                "原始文件归档目录",
+                "失败文件目录",
+                "文件稳定等待时间（秒）",
+                "扫描间隔（秒）",
+                "转换后移动原文件",
+                "启用归档",
+                "递归扫描",
+                "保留原目录结构",
+                "跳过目录列表",
+                "使用标准目录",
+            ):
+                self.assertIn(label.encode(), settings_response.data)
+            self.assertEqual(settings_response.data.count(b"data-fill-default-dirs"), 1)
+            self.assertNotIn(b"data-dir-target", settings_response.data)
 
             response = client.post("/save", data={
                 "input_dir": str(root / "photos" / "in"),
@@ -952,6 +1051,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
                 "skip_dir_names": ".stfolder\n@eaDir\n#recycle",
             })
             self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].startswith("/settings?message="))
             saved = json.loads(settings.config_path.read_text())
             self.assertEqual(saved["input_dir"], str(root / "photos" / "in"))
             self.assertEqual(saved["stable_seconds"], 9.0)
@@ -962,23 +1062,26 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(saved["skip_dir_names"], [".stfolder", "@eaDir", "#recycle"])
             self.assertTrue(fake_worker.cleared)
 
+            saved_page = client.get(response.headers["Location"])
+            self.assertEqual(saved_page.status_code, 200)
+            self.assertIn("配置已保存并立即生效".encode(), saved_page.data)
+
             response = client.post("/scan")
             self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].startswith("/?message="))
             self.assertEqual(fake_worker.scans, 1)
 
             response = client.post("/scan/force")
             self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].startswith("/?message="))
             self.assertEqual(fake_worker.force_scans, 1)
 
             response = client.get("/debug/candidates")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("候选调试".encode(), response.data)
-            self.assertIn("文件路径".encode(), response.data)
-            self.assertIn("已等待秒数".encode(), response.data)
-            self.assertIn("size/mtime 是否稳定".encode(), response.data)
-            self.assertIn("下一次可处理时间".encode(), response.data)
-            self.assertIn("状态原因".encode(), response.data)
-            self.assertIn("waiting_for_stable".encode(), response.data)
+            for label in ("高级工具", "候选队列", "文件路径", "已等待", "稳定状态", "预计处理", "原因", "文件状态"):
+                self.assertIn(label.encode(), response.data)
+            self.assertIn("Live Photo 文件对".encode(), response.data)
+            self.assertIn("等待文件稳定".encode(), response.data)
             store.close()
 
     @unittest.skipIf(create_app is None, "Flask is not installed")
@@ -1022,7 +1125,7 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertIn("测试指定文件对".encode(), response.data)
             self.assertIn("/photos/2026/5/IMG_0056.HEIC".encode(), response.data)
             self.assertIn("/photos/2026/5/IMG_0056.MOV".encode(), response.data)
-            self.assertIn("成功时输出为与原图一致的格式".encode(), response.data)
+            self.assertIn("成功时输出会沿用原图格式".encode(), response.data)
             self.assertNotIn("成功时输出到 /photos/live/年份/月份/文件名.jpg".encode(), response.data)
 
             response = client.post("/debug/test-pair", data={
@@ -1033,7 +1136,9 @@ class LivePhotoWorkerTests(unittest.TestCase):
             self.assertEqual(calls, [(Path("/photos/2026/5/IMG_0056.HEIC"), Path("/photos/2026/5/IMG_0056.MOV"))])
             self.assertIn("测试失败".encode(), response.data)
             self.assertIn("MotionPhoto2 exited with code 7".encode(), response.data)
-            self.assertIn("return code".encode(), response.data)
+            self.assertIn("退出码".encode(), response.data)
+            self.assertIn("标准输出".encode(), response.data)
+            self.assertIn("错误输出".encode(), response.data)
             self.assertIn("diagnostic stdout".encode(), response.data)
             self.assertIn("diagnostic stderr".encode(), response.data)
             self.assertIn("/photos/live/2026/5/IMG_0056.heic".encode(), response.data)
@@ -1071,7 +1176,8 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             logs_response = client.get("/logs")
             self.assertEqual(logs_response.status_code, 200)
-            self.assertIn("查看日志".encode(), logs_response.data)
+            self.assertIn("日志阅读".encode(), logs_response.data)
+            self.assertIn("最近输出".encode(), logs_response.data)
             self.assertIn("ERROR".encode(), logs_response.data)
             self.assertIn("转换失败".encode(), logs_response.data)
             self.assertNotIn(b"\x1b[31m", logs_response.data)
@@ -1084,25 +1190,46 @@ class LivePhotoWorkerTests(unittest.TestCase):
 
             stats_response = client.get("/stats")
             self.assertEqual(stats_response.status_code, 200)
-            self.assertIn("已合并 Live Photo 数量".encode(), stats_response.data)
-            self.assertIn("失败数量".encode(), stats_response.data)
-            self.assertIn("今日处理数量".encode(), stats_response.data)
-            self.assertIn("最近处理文件".encode(), stats_response.data)
-            self.assertIn("等待稳定的文件数".encode(), stats_response.data)
-            self.assertIn("等待稳定的 Live Photo 数".encode(), stats_response.data)
-            self.assertIn("扫描目录数".encode(), stats_response.data)
-            self.assertIn("扫描文件数".encode(), stats_response.data)
-            self.assertIn("跳过目录数".encode(), stats_response.data)
-            self.assertIn("已跳过数量".encode(), stats_response.data)
-            self.assertIn("已复制普通照片数量".encode(), stats_response.data)
-            self.assertIn("已复制普通视频数量".encode(), stats_response.data)
+            for label in (
+                "任务记录",
+                "处理分类",
+                "已合并 Live Photo",
+                "已复制普通照片",
+                "已复制普通视频",
+                "已跳过",
+                "失败",
+                "任务明细",
+            ):
+                self.assertIn(label.encode(), stats_response.data)
 
             about_response = client.get("/about")
             self.assertEqual(about_response.status_code, 200)
             self.assertIn("LiveMotion".encode(), about_response.data)
-            self.assertIn("Version".encode(), about_response.data)
+            self.assertIn("版本".encode(), about_response.data)
             self.assertIn("https://github.com/dttxorg/livemotion".encode(), about_response.data)
-            self.assertIn("MotionPhoto2 致谢".encode(), about_response.data)
+            self.assertIn("核心能力".encode(), about_response.data)
+            store.close()
+
+    @unittest.skipIf(create_app is None, "Flask is not installed")
+    def test_web_existing_page_routes_remain_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = test_settings(root)
+            settings.ensure_directories()
+            store = ProcessingStore(settings.db_path)
+            app = create_app(  # type: ignore[misc]
+                settings=settings,
+                worker=FakeWebWorker(),  # type: ignore[arg-type]
+                store=store,
+                log_handler=RecentLogHandler(),
+            )
+            client = app.test_client()
+
+            for route in ("/", "/stats", "/logs", "/debug/candidates", "/debug/test-pair", "/about", "/settings"):
+                with self.subTest(route=route):
+                    self.assertEqual(client.get(route).status_code, 200)
+            self.assertEqual(client.get("/healthz").get_json(), {"status": "ok"})
+            self.assertEqual(client.get("/favicon.svg").mimetype, "image/svg+xml")
             store.close()
 
 

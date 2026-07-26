@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="page-hero compact-hero">
+  <div>
+    <div class="eyebrow">高级工具</div>
+    <h1>候选队列</h1>
+    <p>检查正在等待稳定的候选文件、预计处理时间和未处理原因。</p>
+  </div>
+  <div class="action-cluster inline-actions" aria-label="候选队列操作">
+    <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary">立即扫描</button></form>
+    <form method="post" action="{{ url_for('force_scan_now') }}"><button type="submit" class="btn btn-warning">强制处理</button></form>
+  </div>
+</section>
+
+<section class="app-card" aria-labelledby="candidate-table-title">
+  <div class="section-heading">
+    <div><div class="section-kicker">等待稳定</div><h2 id="candidate-table-title">候选文件</h2></div>
+    <span class="muted-small">强制处理会跳过稳定等待。</span>
+  </div>
+  {% if candidate_rows %}
+  <div class="table-responsive">
+    <table class="table app-table app-table-dense candidate-table align-middle mb-0">
+      <thead><tr><th class="candidate-type-col">类型</th><th class="candidate-path-col">文件路径</th><th class="candidate-wait-col">已等待</th><th class="candidate-stability-col">稳定状态</th><th class="candidate-next-col">预计处理</th><th class="candidate-reason-col">原因</th><th class="candidate-file-state-col">文件状态</th></tr></thead>
+      <tbody>
+        {% for row in candidate_rows %}
+        <tr>
+          <td class="candidate-type-col"><span class="badge text-bg-secondary status-badge" title="{{ row.candidate_type }}">{{ row.candidate_type_label }}</span></td>
+          <td class="text-path candidate-path-col">{{ row.path }}</td>
+          <td class="candidate-wait-col">{{ "%.1f"|format(row.waited_seconds) }} 秒</td>
+          <td class="candidate-stability-col">{% if row.is_stable %}<span class="badge text-bg-success status-badge">稳定</span>{% else %}<span class="badge text-bg-warning status-badge">变化中</span>{% endif %}</td>
+          <td class="candidate-next-col">{{ row.next_process_text }}</td>
+          <td class="candidate-reason-col" title="{{ row.reason }}">{{ row.reason_label }}</td>
+          <td class="text-path small candidate-file-state-col">图片={{ row.image_size }}/{{ row.image_mtime }}<br>视频={{ row.video_size }}/{{ row.video_mtime }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {{ ui.empty_state('当前没有等待稳定的候选文件', '新文件同步到输入目录后，会在这里显示等待状态。') }}
+  {% endif %}
+</section>
+{% endblock %}

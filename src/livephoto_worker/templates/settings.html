@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-hero settings-hero">
+  <div>
+    <div class="eyebrow">服务配置</div>
+    <h1>设置</h1>
+    <p>修改目录、扫描节奏与文件处理规则。保存后立即生效。</p>
+  </div>
+  <div class="hero-meta"><span>配置文件</span><code title="{{ settings.config_path }}">{{ settings.config_path }}</code></div>
+</section>
+
+<form method="post" action="{{ url_for('save_config') }}" class="settings-form">
+  <section class="app-card settings-section" aria-labelledby="directories-title">
+    <div class="section-heading">
+      <div>
+        <div class="section-kicker">目录与同步</div>
+        <h2 id="directories-title">照片处理路径</h2>
+      </div>
+      <button type="button" class="btn btn-outline-primary btn-sm" data-fill-default-dirs
+        data-input-dir="{{ default_directories.input_dir }}"
+        data-output-dir="{{ default_directories.output_dir }}"
+        data-archive-dir="{{ default_directories.archive_dir }}"
+        data-failed-dir="{{ default_directories.failed_dir }}">使用标准目录</button>
+    </div>
+    <p class="section-description">标准目录会填入表单，仍需点击“保存并生效”才会写入配置。</p>
+    <div class="row g-4">
+      {% for field in dir_fields %}
+      <div class="col-lg-6">
+        <label class="form-label config-label" for="{{ field.name }}">{{ field.label }}</label>
+        <input class="form-control text-path" id="{{ field.name }}" name="{{ field.name }}" type="text" value="{{ field.value }}" title="{{ field.value }}" required>
+        <div class="field-help">{{ field.help }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="row g-4">
+    <div class="col-xl-5">
+      <section class="app-card settings-section h-100" aria-labelledby="scan-title">
+        <div class="section-heading compact-heading">
+          <div><div class="section-kicker">扫描节奏</div><h2 id="scan-title">传输稳定判断</h2></div>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6 col-xl-12">
+            <label class="form-label config-label" for="stable_seconds">文件稳定等待时间（秒）</label>
+            <input class="form-control" id="stable_seconds" name="stable_seconds" type="number" min="0" step="0.1" value="{{ settings.stable_seconds }}" required>
+            <div class="field-help">等待文件大小和修改时间不再变化后再处理。</div>
+          </div>
+          <div class="col-md-6 col-xl-12">
+            <label class="form-label config-label" for="poll_interval">扫描间隔（秒）</label>
+            <input class="form-control" id="poll_interval" name="poll_interval" type="number" min="1" step="0.1" value="{{ settings.poll_interval }}" required>
+            <div class="field-help">后台重新检查输入目录的频率。</div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="col-xl-7">
+      <section class="app-card settings-section h-100" aria-labelledby="processing-title">
+        <div class="section-heading compact-heading">
+          <div><div class="section-kicker">文件处理</div><h2 id="processing-title">整理规则</h2></div>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="setting-toggle">
+              <input class="form-check-input" id="move_originals" name="move_originals" type="checkbox" value="1" {% if settings.move_originals %}checked{% endif %}>
+              <label for="move_originals">转换后移动原文件</label>
+              <p>关闭后，原始 HEIC/JPG 与 MOV 会保留在输入目录。</p>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="setting-toggle">
+              <input class="form-check-input" id="enable_archive" name="enable_archive" type="checkbox" value="1" {% if settings.enable_archive %}checked{% endif %}>
+              <label for="enable_archive">启用归档</label>
+              <p id="archive-dependency-note"
+                data-enabled-text="成功转换的原始文件会移动到归档目录。"
+                data-move-disabled-text="只有启用“转换后移动原文件”时，归档才会生效。"
+                data-archive-disabled-text="归档已关闭，成功转换的原始文件会保留在输入目录。">{% if not settings.move_originals %}只有启用“转换后移动原文件”时，归档才会生效。{% elif not settings.enable_archive %}归档已关闭，成功转换的原始文件会保留在输入目录。{% else %}成功转换的原始文件会移动到归档目录。{% endif %}</p>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="setting-toggle">
+              <input class="form-check-input" id="recursive_scan" name="recursive_scan" type="checkbox" value="1" {% if settings.recursive_scan %}checked{% endif %}>
+              <label for="recursive_scan">递归扫描</label>
+              <p>扫描输入目录下的所有子文件夹。</p>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="setting-toggle">
+              <input class="form-check-input" id="preserve_directory_structure" name="preserve_directory_structure" type="checkbox" value="1" {% if settings.preserve_directory_structure %}checked{% endif %}>
+              <label for="preserve_directory_structure">保留原目录结构</label>
+              <p>输出、归档和失败目录将保留相对路径。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section class="app-card settings-section" aria-labelledby="skip-title">
+    <div class="section-heading compact-heading">
+      <div><div class="section-kicker">扫描排除</div><h2 id="skip-title">跳过目录列表</h2></div>
+    </div>
+    <label class="visually-hidden" for="skip_dir_names">跳过目录列表</label>
+    <textarea class="form-control text-path" id="skip_dir_names" name="skip_dir_names" rows="6" spellcheck="false">{{ settings.skip_dir_names | join('\n') }}</textarea>
+    <div class="field-help">每行一个目录名。系统始终跳过 .stfolder、@eaDir、#recycle、.Trash、.AppleDouble、__MACOSX，并自动排除 output、archive、failed 目录。</div>
+  </section>
+
+  <div class="settings-savebar">
+    <div><strong>保存后立即生效</strong><span>保存会清空当前等待队列，以新配置重新判断文件状态。</span></div>
+    <div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="{{ url_for('index') }}">返回控制台</a><button type="submit" class="btn btn-primary">保存并生效</button></div>
+  </div>
+</form>
+{% endblock %}

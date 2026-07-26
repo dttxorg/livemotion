@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="page-hero compact-hero">
+  <div>
+    <div class="eyebrow">运行日志</div>
+    <h1>日志</h1>
+    <p>显示最近 {{ log_entries|length }} 条运行日志，已自动过滤 ANSI 颜色转义字符。</p>
+  </div>
+  <form method="post" action="{{ url_for('clear_logs') }}" onsubmit="return window.confirm('确定清空当前最近日志吗？');">
+    <button type="submit" class="btn btn-outline-danger">清空日志</button>
+  </form>
+</section>
+
+<section class="app-card" aria-labelledby="log-list-title">
+  <div class="section-heading">
+    <div><div class="section-kicker">日志阅读</div><h2 id="log-list-title">最近输出</h2></div>
+    {% if log_entries %}
+    <div class="log-filters" role="group" aria-label="按日志级别筛选">
+      <button type="button" class="btn btn-sm btn-outline-secondary active" data-log-filter="all">全部</button>
+      {% for level in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] %}
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-log-filter="{{ level }}">{{ level }}</button>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% if log_entries %}
+  <div class="log-panel" role="log" aria-label="最近日志">
+    {% for entry in log_entries %}
+    <div class="log-row" data-log-row data-log-level="{{ entry.level }}">
+      <div><span class="badge {{ entry.badge_class }} status-badge">{{ entry.level }}</span></div>
+      <div class="log-message">{{ entry.message }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="log-filter-empty" data-log-filter-empty hidden>当前筛选没有匹配日志。</div>
+  {% else %}
+  {{ ui.empty_state('暂无日志', '服务运行后，最近日志会显示在这里。') }}
+  {% endif %}
+</section>
+{% endblock %}

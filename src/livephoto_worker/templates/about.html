@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="app-card about-card">
+  <div class="about-logo" aria-hidden="true">▶</div>
+  <div class="eyebrow">关于 LiveMotion</div>
+  <h1>Live Photo 自动整理服务</h1>
+  <p class="about-intro">将 Live Photo 合成为 Google Motion Photo，并把普通照片和视频整理到 Pixel 同步输出目录。</p>
+  <div class="row g-3 mt-2 text-start">
+    <div class="col-md-4">{{ ui.metric('版本', app_version, '当前服务版本', 'tone-primary') }}</div>
+    <div class="col-md-8">
+      <div class="metric-card tone-neutral">
+        <div class="metric-label">项目地址</div>
+        <div class="metric-value metric-value-link"><a href="{{ github_url }}" target="_blank" rel="noreferrer">{{ github_url }}</a></div>
+        <div class="metric-helper">在新窗口打开 GitHub 项目页</div>
+      </div>
+    </div>
+    <div class="col-12">{{ ui.metric('核心能力', 'MotionPhoto2', 'LiveMotion 调用 MotionPhoto2 完成 Motion Photo 合成。', 'tone-success') }}</div>
+  </div>
+</section>
+{% endblock %}

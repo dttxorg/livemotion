@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="page-hero dashboard-hero">
+  <div>
+    <div class="eyebrow"><span class="eyebrow-dot {% if motionphoto2_status.available %}is-online{% else %}is-offline{% endif %}"></span> 服务{{ '运行正常' if motionphoto2_status.available else '需要处理' }}</div>
+    <h1>运行概览</h1>
+    <p>集中查看 Live Photo 整理进度、异常与最近任务。</p>
+  </div>
+  <div class="action-cluster" aria-label="扫描操作">
+    <form method="post" action="{{ url_for('scan_now') }}">
+      <button type="submit" class="btn btn-primary">立即扫描</button>
+    </form>
+    <form method="post" action="{{ url_for('force_scan_now') }}">
+      <button type="submit" class="btn btn-warning">强制扫描</button>
+    </form>
+    <div class="action-note">强制扫描会跳过稳定等待，适合首次导入或排障。</div>
+  </div>
+</section>
+
+<section class="app-card mb-4" aria-labelledby="overview-title">
+  <div class="section-heading">
+    <div>
+      <div class="section-kicker">运行健康</div>
+      <h2 id="overview-title">今日运行情况</h2>
+    </div>
+    <span class="system-status {% if motionphoto2_status.available %}is-online{% else %}is-offline{% endif %}">
+      <span class="status-dot"></span>{{ 'MotionPhoto2 可用' if motionphoto2_status.available else 'MotionPhoto2 不可用' }}
+    </span>
+  </div>
+  <div class="metric-grid metric-grid-primary">
+    {{ ui.metric('今日完成', stats.today_completed_count, '合成与普通媒体整理', 'tone-success') }}
+    {{ ui.metric('今日失败', stats.today_failed_count, '失败文件会进入失败目录', 'tone-danger') }}
+    {{ ui.metric('等待稳定', pending_status.waiting_count, pending_status.waiting_live_pairs|string + ' 个 Live Photo 文件对', 'tone-warning') }}
+    {{ ui.metric('最近活动', latest_job_text, '最近一次任务更新时间', 'tone-neutral') }}
+  </div>
+</section>
+
+<section class="app-card mb-4" aria-labelledby="trend-title">
+  <div class="section-heading">
+    <div>
+      <div class="section-kicker">7 天趋势</div>
+      <h2 id="trend-title">完成与失败</h2>
+    </div>
+    <div class="trend-legend" aria-label="趋势图图例"><span><i class="legend-dot completed"></i>完成</span><span><i class="legend-dot failed"></i>失败</span></div>
+  </div>
+  {% if stats.total_jobs %}
+  <div class="trend-chart" role="img" aria-label="最近七天完成与失败任务趋势">
+    {% for point in stats.seven_day_trend %}
+    {% set completed_height = ((point.completed / trend_max) * 100)|round(0, 'ceil') %}
+    {% set failed_height = ((point.failed / trend_max) * 100)|round(0, 'ceil') %}
+    <div class="trend-day" title="{{ point.date }}：完成 {{ point.completed }}，失败 {{ point.failed }}">
+      <div class="trend-bars" aria-hidden="true">
+        <div class="trend-bar completed" style="height: {{ completed_height }}%"></div>
+        <div class="trend-bar failed" style="height: {{ failed_height }}%"></div>
+      </div>
+      <div class="trend-count"><span>{{ point.completed }}</span><span class="text-danger">{{ point.failed }}</span></div>
+      <div class="trend-label">{{ point.label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  {{ ui.empty_state('尚无趋势数据', '完成第一批任务后，这里会显示最近 7 天的完成与失败情况。') }}
+  {% endif %}
+</section>
+
+<section class="app-card" aria-labelledby="recent-jobs-title">
+  <div class="section-heading">
+    <div>
+      <div class="section-kicker">最近动态</div>
+      <h2 id="recent-jobs-title">最近任务</h2>
+    </div>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('stats_page') }}">查看全部任务</a>
+  </div>
+  {% with recent_jobs=dashboard_jobs, empty_title='暂无任务记录', empty_detail='完成扫描后，结果会显示在这里。' %}
+    {% include "partials/jobs_table.html" %}
+  {% endwith %}
+</section>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="page-hero compact-hero">
+  <div>
+    <div class="eyebrow">任务历史</div>
+    <h1>任务记录</h1>
+    <p>查看每次合成、复制、跳过与失败处理的结果。</p>
+  </div>
+  <div class="action-cluster inline-actions" aria-label="扫描操作">
+    <form method="post" action="{{ url_for('scan_now') }}"><button type="submit" class="btn btn-primary">立即扫描</button></form>
+    <form method="post" action="{{ url_for('force_scan_now') }}"><button type="submit" class="btn btn-warning">强制扫描</button></form>
+  </div>
+</section>
+
+<section class="app-card mb-4" aria-labelledby="task-summary-title">
+  <div class="section-heading"><div><div class="section-kicker">累计结果</div><h2 id="task-summary-title">处理分类</h2></div><span class="muted-small">共 {{ stats.total_jobs }} 条任务</span></div>
+  <div class="metric-grid metric-grid-detail">
+    {{ ui.metric('已合并 Live Photo', stats.success_count, '成功生成 Motion Photo', 'tone-success') }}
+    {{ ui.metric('已复制普通照片', stats.copied_photo_count, '已进入 Pixel 同步输出目录', 'tone-primary') }}
+    {{ ui.metric('已复制普通视频', stats.copied_video_count, '已进入 Pixel 同步输出目录', 'tone-primary') }}
+    {{ ui.metric('已跳过', stats.skipped_count, '已处理过或内容重复', 'tone-neutral') }}
+    {{ ui.metric('失败', stats.failed_count, '失败文件需要人工检查', 'tone-danger') }}
+  </div>
+</section>
+
+<section class="app-card" aria-labelledby="all-jobs-title">
+  <div class="section-heading"><div><div class="section-kicker">最近 20 条</div><h2 id="all-jobs-title">任务明细</h2></div></div>
+  {% with empty_title='暂无任务记录', empty_detail='使用“立即扫描”后，任务结果会显示在这里。' %}
+    {% include "partials/jobs_table.html" %}
+  {% endwith %}
+</section>
+{% endblock %}

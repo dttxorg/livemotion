@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="page-hero compact-hero">
+  <div>
+    <div class="eyebrow">高级工具</div>
+    <h1>文件对诊断</h1>
+    <p>绕过扫描、稳定等待和去重，直接测试指定图片与视频能否合成。</p>
+  </div>
+  <a class="btn btn-outline-secondary" href="{{ url_for('logs_page') }}">查看日志</a>
+</section>
+
+<section class="app-card mb-4" aria-labelledby="diagnostic-form-title">
+  <div class="section-heading"><div><div class="section-kicker">手动复现</div><h2 id="diagnostic-form-title">测试指定文件对</h2></div></div>
+  <form method="post" action="{{ url_for('test_pair_run') }}">
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <label class="form-label config-label" for="diagnostic_image">图片文件路径</label>
+        <input class="form-control text-path" id="diagnostic_image" name="image" type="text" value="{{ diagnostic_image }}" required>
+      </div>
+      <div class="col-lg-6">
+        <label class="form-label config-label" for="diagnostic_video">视频文件路径</label>
+        <input class="form-control text-path" id="diagnostic_video" name="video" type="text" value="{{ diagnostic_video }}" required>
+      </div>
+    </div>
+    <div class="diagnostic-actions"><button type="submit" class="btn btn-primary">开始诊断</button><span>成功时输出会沿用原图格式，例如 HEIC 输出 .heic，JPG 输出 .jpg。</span></div>
+  </form>
+</section>
+
+{% if diagnostic_result %}
+<section class="app-card" aria-labelledby="diagnostic-result-title">
+  <div class="section-heading"><div><div class="section-kicker">诊断结果</div><h2 id="diagnostic-result-title">{{ '测试成功' if diagnostic_result.success else '测试失败' }}</h2></div></div>
+  <div class="alert {% if diagnostic_result.success %}alert-success{% else %}alert-danger{% endif %} app-alert mb-4">{{ diagnostic_result.reason }}</div>
+  <div class="metric-grid diagnostic-summary mb-4">
+    {{ ui.metric('图片文件', '存在' if diagnostic_result.image_exists else '缺失', diagnostic_result.image_path, 'tone-success' if diagnostic_result.image_exists else 'tone-danger') }}
+    {{ ui.metric('视频文件', '存在' if diagnostic_result.video_exists else '缺失', diagnostic_result.video_path, 'tone-success' if diagnostic_result.video_exists else 'tone-danger') }}
+    {{ ui.metric('退出码', diagnostic_result.returncode if diagnostic_result.returncode is not none else '—', 'MotionPhoto2 返回结果', 'tone-neutral') }}
+    <div class="metric-card tone-primary diagnostic-path-card">
+      <div class="metric-label">诊断输出</div>
+      <div class="metric-value diagnostic-path-value">{{ diagnostic_result.output_path }}</div>
+      <div class="metric-helper">生成的诊断文件位置</div>
+    </div>
+  </div>
+  <h3 class="output-heading">执行命令</h3>
+  <pre class="diagnostic-output mb-4">{{ diagnostic_result.command_text }}</pre>
+  <div class="row g-3">
+    <div class="col-lg-6"><h3 class="output-heading">标准输出</h3><pre class="diagnostic-output">{{ diagnostic_result.stdout or '(empty)' }}</pre></div>
+    <div class="col-lg-6"><h3 class="output-heading">错误输出</h3><pre class="diagnostic-output">{{ diagnostic_result.stderr or '(empty)' }}</pre></div>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

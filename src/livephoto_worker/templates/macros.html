@@ -1,0 +1,14 @@
+{% macro metric(label, value, helper='', tone='') -%}
+<div class="metric-card {{ tone }}">
+  <div class="metric-label">{{ label }}</div>
+  <div class="metric-value">{{ value }}</div>
+  {% if helper %}<div class="metric-helper">{{ helper }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro empty_state(title, detail='') -%}
+<div class="empty-state">
+  <div class="empty-state-title">{{ title }}</div>
+  {% if detail %}<div class="empty-state-detail">{{ detail }}</div>{% endif %}
+</div>
+{%- endmacro %}

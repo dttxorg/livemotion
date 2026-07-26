@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -277,6 +277,54 @@ class ProcessingStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def seven_day_trend(self, *, days: int = 7, end_date: date | None = None) -> list[dict[str, Any]]:
+        """Return a zero-filled local-date activity trend for the dashboard.
+
+        Completed work includes both Live Photo merges and copied ordinary media;
+        skipped duplicates stay out of the chart so the two series remain a
+        clear operational success/failure signal.
+        """
+        if days < 1:
+            raise ValueError("days must be at least 1")
+
+        final_day = end_date or datetime.now().astimezone().date()
+        first_day = final_day - timedelta(days=days - 1)
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT
+                    date(created_at, 'localtime') AS day,
+                    SUM(CASE WHEN status IN ('success', 'copied_photo', 'copied_video') THEN 1 ELSE 0 END) AS completed,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+                FROM jobs
+                WHERE date(created_at, 'localtime') BETWEEN ? AND ?
+                GROUP BY date(created_at, 'localtime')
+                ORDER BY day
+                """,
+                (first_day.isoformat(), final_day.isoformat()),
+            ).fetchall()
+
+        by_day = {
+            row["day"]: {
+                "completed": int(row["completed"] or 0),
+                "failed": int(row["failed"] or 0),
+            }
+            for row in rows
+        }
+        trend: list[dict[str, Any]] = []
+        for offset in range(days):
+            current_day = first_day + timedelta(days=offset)
+            values = by_day.get(current_day.isoformat(), {"completed": 0, "failed": 0})
+            trend.append(
+                {
+                    "date": current_day.isoformat(),
+                    "label": f"{current_day.month}/{current_day.day}",
+                    "completed": values["completed"],
+                    "failed": values["failed"],
+                }
+            )
+        return trend
+
     def stats(self) -> dict[str, Any]:
         with self.lock:
             processed_count = self.conn.execute("SELECT COUNT(*) AS count FROM processed_pairs").fetchone()["count"]
@@ -303,6 +351,22 @@ class ProcessingStore:
             today_count = self.conn.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE date(created_at, 'localtime') = date('now', 'localtime')",
             ).fetchone()["count"]
+            today_completed_count = self.conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM jobs
+                WHERE date(created_at, 'localtime') = date('now', 'localtime')
+                    AND status IN ('success', 'copied_photo', 'copied_video')
+                """,
+            ).fetchone()["count"]
+            today_failed_count = self.conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM jobs
+                WHERE date(created_at, 'localtime') = date('now', 'localtime')
+                    AND status = 'failed'
+                """,
+            ).fetchone()["count"]
             latest_file = self.conn.execute(
                 """
                 SELECT image_name, video_name, output_path, status, created_at
@@ -319,8 +383,12 @@ class ProcessingStore:
             "copied_video_count": copied_video_count,
             "skipped_count": skipped_count,
             "today_count": today_count,
+            "completed_count": success_count + copied_photo_count + copied_video_count,
+            "today_completed_count": today_completed_count,
+            "today_failed_count": today_failed_count,
             "total_jobs": total_jobs,
             "by_status": {row["status"]: row["count"] for row in job_rows},
             "latest_job_at": latest["created_at"] if latest is not None else None,
             "latest_processed_file": dict(latest_file) if latest_file is not None else None,
+            "seven_day_trend": self.seven_day_trend(),
         }

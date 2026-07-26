@@ -1,0 +1,23 @@
+{% import "macros.html" as ui %}
+{% if recent_jobs %}
+<div class="table-responsive">
+  <table class="table app-table align-middle mb-0">
+    <thead>
+      <tr><th>时间</th><th>状态</th><th>图片</th><th>视频</th><th>输出或错误</th></tr>
+    </thead>
+    <tbody>
+      {% for job in recent_jobs %}
+      <tr>
+        <td class="text-secondary small text-nowrap" title="{{ job.created_at }}">{{ job.created_at_text }}</td>
+        <td><span class="badge {{ status_badge(job.status) }} status-badge">{{ status_label(job.status) }}</span></td>
+        <td class="text-path">{{ job.image_name or '—' }}</td>
+        <td class="text-path">{{ job.video_name or '—' }}</td>
+        <td class="text-path {% if job.error %}text-danger{% endif %}">{{ job.error or job.output_path or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ ui.empty_state(empty_title|default('暂无任务记录'), empty_detail|default('完成扫描后，处理结果会显示在这里。')) }}
+{% endif %}
