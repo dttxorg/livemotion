@@ -274,7 +274,10 @@ class DefaultConfigurationRegressions(ScriptFixtures):
         (self.root / "config").write_text("blocked")
         result = self.run_shell(self.setup_body("create_livemotion_defaults"))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("config", result.stderr)
+        # mkdir diagnostics differ by platform/locale; require a visible error,
+        # not a particular system-generated filename or English message.
+        self.assertTrue(result.stderr.strip(), "directory failure must be visible")
+        self.assertEqual((self.root / "config").read_text(), "blocked")
 
     def test_missing_volume_is_not_created_on_root_filesystem(self) -> None:
         missing_volume = "/vol987654321-livemotion-regression"
