@@ -13,7 +13,10 @@ case "${TRIM_PKGVAR}" in
     /usr/local/apps/@appdata/*) ;;
     *) echo "ERROR: TRIM_PKGVAR=${TRIM_PKGVAR} 不是有效的应用数据路径，拒绝继续" >&2; exit 1 ;;
 esac
-/bin/mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
+if ! mkdir -p "${TRIM_PKGVAR}"; then
+    echo "ERROR: 创建应用数据目录失败: ${TRIM_PKGVAR}" >&2
+    exit 1
+fi
 
 INST_ETC="/var/apps/${TRIM_APPNAME}/etc"
 INST_VARIABLES="${INST_ETC}/installer-variables"
@@ -35,26 +38,42 @@ error_exit() {
 }
 
 install_log() {
-    local msg="$*"
-    if [ -z "$msg" ]; then
+    if [ "$#" -eq 0 ]; then
         while IFS= read -r line; do install_log "$line"; done
     else
-        echo -e "$(date +'%Y/%m/%d %H:%M:%S')\t${msg}" 1>&2
+        printf '%s\t%s\n' "$(date +'%Y/%m/%d %H:%M:%S')" "$*" >&2
     fi
 }
 
 call_func() {
-    FUNC=$1
-    LOG=$2
-    if type "${FUNC}" 2>/dev/null | grep -q 'function' 2>/dev/null; then
-        if [ -n "${LOG}" ]; then
-            install_log "Begin ${FUNC}"
-            eval "${FUNC}" 2>&1 | ${LOG}
-            install_log "End ${FUNC}"
-        else
-            eval "${FUNC}"
-        fi
+    local func="${1:-}" log="${2:-}" result log_result
+    local -a statuses
+    if ! declare -F "${func}" >/dev/null; then
+        return 0
     fi
+    if [ -z "${log}" ]; then
+        "${func}"
+        return $?
+    fi
+
+    install_log "Begin ${func}" || return $?
+    # The logger is the last pipeline command: preserve the hook's own status.
+    if "${func}" 2>&1 | "${log}"; then
+        statuses=("${PIPESTATUS[@]}")
+    else
+        statuses=("${PIPESTATUS[@]}")
+    fi
+    result="${statuses[0]}"
+    if [ "${result}" -eq 0 ]; then
+        result="${statuses[1]}"
+    fi
+    if install_log "End ${func} (status=${result})"; then
+        :
+    else
+        log_result=$?
+        if [ "${result}" -eq 0 ]; then result="${log_result}"; fi
+    fi
+    return "${result}"
 }
 
 load_variables_from_file() {
@@ -89,67 +108,56 @@ log_step() {
 stop_daemon() { :; }
 
 daemon_status() {
-    FILE_PATH="${TRIM_APPDEST}/docker/docker-compose.yaml"
-    if [ -f "$FILE_PATH" ]; then
-        DOCKER_NAME=$(grep "container_name" "$FILE_PATH" | awk -F ':' '{print $2}' | xargs)
-    fi
-    if [ -n "$DOCKER_NAME" ]; then
-        docker inspect "$DOCKER_NAME" | grep -q '"Status": "running",'
-        return $?
-    fi
-    return 1
+    local file_path="${TRIM_APPDEST}/docker/docker-compose.yaml" docker_name running
+    [ -r "$file_path" ] || return 1
+    docker_name=$(awk '$1 == "container_name:" { print $2; exit }' "$file_path")
+    [ -n "$docker_name" ] || return 1
+    running=$(docker inspect --format '{{.State.Running}}' "$docker_name" 2>/dev/null) || return 1
+    [ "$running" = "true" ]
 }
 
 install_init() {
     log_step "install_init"
-    call_func "validate_preinst" install_log
+    call_func "validate_preinst" install_log || return $?
     call_func "service_preinst" install_log
-    exit 0
 }
 
 install_callback() {
     log_step "install_callback"
     call_func "service_postinst" install_log
-    exit 0
 }
 
 uninstall_init() {
     log_step "uninstall_init"
-    stop_daemon
+    stop_daemon || return $?
     call_func "service_preuninst" install_log
-    exit 0
 }
 
 uninstall_callback() {
     log_step "uninstall_callback"
     call_func "service_postuninst" install_log
-    exit 0
 }
 
 upgrade_init() {
     log_step "upgrade_init"
-    call_func "validate_preupgrade" install_log
-    stop_daemon
-    call_func "service_preupgrade" install_log
+    call_func "validate_preupgrade" install_log || return $?
+    stop_daemon || return $?
+    call_func "service_preupgrade" install_log || return $?
     call_func "service_save" install_log
-    exit 0
 }
 
 upgrade_callback() {
     log_step "upgrade_callback"
-    call_func "service_restore" install_log
+    call_func "service_restore" install_log || return $?
     call_func "service_postupgrade" install_log
-    exit 0
 }
 
 config_init() {
     log_step "config_init"
     call_func "service_preconfig" install_log
-    exit 0
 }
 
 config_callback() {
     log_step "config_callback"
     call_func "service_postconfig" install_log
-    exit 0
 }

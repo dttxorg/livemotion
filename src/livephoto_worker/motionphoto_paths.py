@@ -32,21 +32,15 @@ def possible_motionphoto_outputs(expected_path: Path) -> list[Path]:
 
 
 def resolve_motionphoto_output(expected_path: Path, *, started_at: float | None = None) -> Path | None:
-    if expected_path.exists():
-        return expected_path
-
-    candidates = possible_motionphoto_outputs(expected_path)
-    existing = [candidate for candidate in candidates if candidate.is_file()]
-    if not existing:
-        return None
-
-    if started_at is not None:
-        recent = [candidate for candidate in existing if candidate.stat().st_mtime >= started_at - 1]
-        if recent:
-            actual = recent[0]
-            logger.info("MotionPhoto2 actual output path: expected=%s actual=%s", expected_path, actual)
-            return actual
-
-    actual = existing[0]
-    logger.info("MotionPhoto2 actual output path: expected=%s actual=%s", expected_path, actual)
-    return actual
+    for candidate in possible_motionphoto_outputs(expected_path):
+        try:
+            if not candidate.is_file():
+                continue
+            if started_at is not None and candidate.stat().st_mtime < started_at - 1:
+                continue
+        except FileNotFoundError:
+            continue
+        if candidate != expected_path:
+            logger.info("MotionPhoto2 actual output path: expected=%s actual=%s", expected_path, candidate)
+        return candidate
+    return None

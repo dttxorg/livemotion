@@ -1,0 +1,9 @@
+Use case: logo-brand
+Asset type: production desktop app icon for a Live Photo-to-motion-photo utility, used at 48px and 64px on a NAS desktop and in a blue web dashboard.
+Primary request: one polished, immediately legible icon combining a photograph and forward playback. A vivid blue rounded-square tile with a clean white photo-frame glyph; the photo has one simple mountain silhouette and a small sun, while a prominent right-facing play triangle is integrated into the right half of the photo. Photograph first, motion second, with very few bold shapes.
+Scene/backdrop: genuinely transparent outer background, not a checkerboard and not a white backdrop.
+Style/medium: premium minimal raster app-icon artwork, crisp smooth antialiased edges, frontal orthographic view, restrained depth through a gentle blue gradient only.
+Composition/framing: square canvas, exactly one centered icon, entire blue tile contained within the central 84% of the canvas with roughly 8% transparent safe margin on all sides. Optically balanced. Large bold white photographic glyph; strong negative space and broad solid strokes remain clear at 48px.
+Color palette: cobalt and royal blue around #2563eb and #3b82f6, white glyph, optional subtle cyan-blue highlight. Match a modern blue interface.
+Text: none.
+Constraints: no text, letters, watermark, label, product mockup, sheet, alternate variants, border around canvas, clock, stopwatch, circular timer, left-facing triangle, left arrow, rewind symbol, filmstrip perforations, photographic textures, floating particles, excessive glow, or cast shadow outside the tile. Only photo plus right-facing play, not a generic video-camera icon. Keep the exterior alpha truly transparent.

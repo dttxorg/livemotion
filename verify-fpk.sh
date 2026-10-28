@@ -85,17 +85,18 @@ for script in main common installer install_init install_callback uninstall_init
 done
 pass "Lifecycle scripts are executable"
 
-python3 - "$ROOT/manifest" "$ROOT/ICON.PNG" "$ROOT/ICON_256.PNG" <<'PY'
+python3 - "$ROOT" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import re
 import struct
 import sys
+import zlib
 from pathlib import Path
 
-manifest_path = Path(sys.argv[1])
-icon_64 = Path(sys.argv[2])
-icon_256 = Path(sys.argv[3])
+root = Path(sys.argv[1])
+manifest_path = root / "manifest"
 
 fields: dict[str, str] = {}
 for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
@@ -129,22 +130,74 @@ if not re.fullmatch(r"\d+(?:\.\d+){1,2}(?:[-+][A-Za-z0-9_.-]+)?", version):
 checksum = fields.get("checksum", "")
 if not re.fullmatch(r"[0-9a-f]{32}", checksum):
     raise SystemExit("manifest checksum must be a 32-char lowercase md5")
+actual_checksum = hashlib.md5((root / "app.tgz").read_bytes()).hexdigest()
+if checksum != actual_checksum:
+    raise SystemExit(f"manifest checksum mismatch: expected {checksum}, app.tgz is {actual_checksum}")
 
-if fields.get("fpk_version") != "0.1.3-r1":
+if fields.get("fpk_version") != "0.1.4-r1":
     raise SystemExit("manifest fpk_version mismatch")
 
-def png_size(path: Path) -> tuple[int, int]:
+def validate_png(path: Path, expected_size: int) -> None:
     data = path.read_bytes()
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise SystemExit(f"{path.name} is not a PNG file")
-    return struct.unpack(">II", data[16:24])
+    offset = 8
+    header = None
+    compressed = bytearray()
+    complete = False
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise SystemExit(f"Truncated PNG chunk: {path}")
+        length = struct.unpack_from(">I", data, offset)[0]
+        kind = data[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if end > len(data):
+            raise SystemExit(f"Truncated PNG payload: {path}")
+        payload = data[offset + 8:offset + 8 + length]
+        crc = struct.unpack_from(">I", data, offset + 8 + length)[0]
+        if zlib.crc32(kind + payload) & 0xFFFFFFFF != crc:
+            raise SystemExit(f"PNG CRC mismatch: {path}")
+        if offset == 8 and (kind != b"IHDR" or length != 13):
+            raise SystemExit(f"Missing PNG IHDR: {path}")
+        if kind == b"IHDR":
+            if header is not None or length != 13:
+                raise SystemExit(f"Invalid PNG IHDR: {path}")
+            header = struct.unpack(">IIBBBBB", payload)
+            if header[:2] != (expected_size, expected_size):
+                raise SystemExit(f"{path} must be {expected_size}x{expected_size} PNG")
+            if header[2:] != (8, 6, 0, 0, 0):
+                raise SystemExit(f"{path} must be a noninterlaced 8-bit RGBA PNG")
+        elif kind == b"IDAT":
+            compressed.extend(payload)
+        elif kind == b"IEND":
+            if length != 0 or end != len(data):
+                raise SystemExit(f"Invalid PNG IEND: {path}")
+            complete = True
+            break
+        offset = end
+    if not complete or not compressed or header is None:
+        raise SystemExit(f"Incomplete PNG: {path}")
+    expected_bytes = expected_size * (1 + expected_size * 4)
+    try:
+        decoder = zlib.decompressobj()
+        scanlines = decoder.decompress(bytes(compressed), expected_bytes + 1)
+    except zlib.error as error:
+        raise SystemExit(f"Invalid PNG image data: {path}: {error}")
+    if len(scanlines) != expected_bytes or not decoder.eof or decoder.unused_data:
+        raise SystemExit(f"PNG image data size mismatch: {path}")
+    stride = 1 + expected_size * 4
+    if any(scanlines[row * stride] > 4 for row in range(expected_size)):
+        raise SystemExit(f"Invalid PNG scanline filter: {path}")
 
-if png_size(icon_64) != (64, 64):
-    raise SystemExit("ICON.PNG must be 64x64 PNG")
-if png_size(icon_256) != (256, 256):
-    raise SystemExit("ICON_256.PNG must be 256x256 PNG")
+for size, name in ((64, "ICON.PNG"), (256, "ICON_256.PNG")):
+    package_icon = root / name
+    desktop_icon = root / "ui" / "images" / f"{size}.png"
+    validate_png(package_icon, size)
+    validate_png(desktop_icon, size)
+    if package_icon.read_bytes() != desktop_icon.read_bytes():
+        raise SystemExit(f"Package and desktop {size}px icons differ")
 PY
-pass "manifest and icons validated"
+pass "manifest checksum, package icons and desktop icons validated"
 
 APP_LIST="$TMP_DIR/app-list.txt"
 mkdir -p "$TMP_DIR/app"
@@ -166,6 +219,17 @@ fi
 [ -f "$TMP_DIR/app/ui/config" ] || fail "app.tgz missing ui/config"
 [ -f "$TMP_DIR/app/ui/images/64.png" ] || fail "app.tgz missing ui/images/64.png"
 [ -f "$TMP_DIR/app/ui/images/256.png" ] || fail "app.tgz missing ui/images/256.png"
+python3 - "$ROOT/ui/images" "$TMP_DIR/app/ui/images" <<'PY'
+import sys
+from pathlib import Path
+
+root_icons, app_icons = map(Path, sys.argv[1:])
+for size in (64, 256):
+    name = f"{size}.png"
+    if (root_icons / name).read_bytes() != (app_icons / name).read_bytes():
+        raise SystemExit(f"Root and app.tgz desktop {size}px icons differ")
+PY
+pass "app.tgz desktop icons match validated package icons"
 
 if ! grep -q '/vol2/photos:/photos' "$TMP_DIR/app/docker/docker-compose.yaml"; then
     fail "docker-compose.yaml missing /vol2/photos:/photos"
@@ -182,8 +246,8 @@ fi
 if grep -q 'ghcr.io/your-user' "$TMP_DIR/app/docker/docker-compose.yaml"; then
     fail "docker-compose.yaml must not contain placeholder ghcr.io/your-user"
 fi
-if ! grep -q 'image: ghcr.io/dttxorg/livemotion:0.1.3' "$TMP_DIR/app/docker/docker-compose.yaml"; then
-    fail "docker-compose.yaml missing prebuilt image ghcr.io/dttxorg/livemotion:0.1.3"
+if ! grep -q 'image: ghcr.io/dttxorg/livemotion:0.1.4' "$TMP_DIR/app/docker/docker-compose.yaml"; then
+    fail "docker-compose.yaml missing prebuilt image ghcr.io/dttxorg/livemotion:0.1.4"
 fi
 pass "app.tgz prebuilt-image docker and ui payload validated"
 

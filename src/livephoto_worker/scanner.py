@@ -89,17 +89,17 @@ def _collect_from_directory(directory: Path) -> tuple[list[MediaPair], list[Medi
         video_path = sorted(videos[stem], key=lambda p: _priority(p, VIDEO_EXTENSIONS))[0]
         pairs.append(MediaPair(stem=stem, image_path=image_path, video_path=video_path))
 
+    selected_images = {pair.image_path for pair in pairs}
+    selected_videos = {pair.video_path for pair in pairs}
     media_items: list[MediaItem] = []
-    for stem, paths in images.items():
-        if stem in paired_stems:
-            continue
+    for paths in images.values():
         for path in sorted(paths, key=lambda p: _priority(p, IMAGE_EXTENSIONS)):
-            media_items.append(MediaItem(path=path, media_type="photo"))
-    for stem, paths in videos.items():
-        if stem in paired_stems:
-            continue
+            if path not in selected_images:
+                media_items.append(MediaItem(path=path, media_type="photo"))
+    for paths in videos.values():
         for path in sorted(paths, key=lambda p: _priority(p, VIDEO_EXTENSIONS)):
-            media_items.append(MediaItem(path=path, media_type="video"))
+            if path not in selected_videos:
+                media_items.append(MediaItem(path=path, media_type="video"))
 
     media_items.sort(key=lambda item: str(item.path).lower())
     return pairs, media_items

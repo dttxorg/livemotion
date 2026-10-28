@@ -7,6 +7,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from .file_utils import media_staging_directory, publish_unique_file, unique_path
 from .motionphoto_paths import preferred_motionphoto_suffix, resolve_motionphoto_output
 from .settings import Settings
 
@@ -130,11 +131,23 @@ def diagnostic_output_path(
     output_root: Path = DEFAULT_DIAGNOSTIC_OUTPUT_ROOT,
     photos_root: Path = DEFAULT_PHOTOS_ROOT,
 ) -> Path:
+    image_path = image_path.expanduser().resolve(strict=False)
+    photos_root = photos_root.expanduser().resolve(strict=False)
+    output_root = output_root.expanduser()
+    resolved_output_root = output_root.resolve(strict=False)
     try:
         relative_image = image_path.relative_to(photos_root)
     except ValueError:
         relative_image = Path(image_path.name)
-    return output_root / relative_image.with_suffix(preferred_motionphoto_suffix(image_path))
+    output_path = output_root / relative_image.with_suffix(preferred_motionphoto_suffix(image_path))
+    if not output_path.resolve(strict=False).is_relative_to(resolved_output_root):
+        # A pre-existing output subdirectory can itself be a symlink out of the
+        # configured tree. Flatten in that case rather than following it.
+        output_path = output_root / Path(image_path.name).with_suffix(preferred_motionphoto_suffix(image_path))
+        if not output_path.resolve(strict=False).is_relative_to(resolved_output_root):
+            # A leaf symlink is occupied too; never return its external target.
+            output_path = unique_path(output_root, output_path.name, marker="diagnostic")
+    return output_path
 
 
 def run_motionphoto2_diagnostic(
@@ -142,11 +155,15 @@ def run_motionphoto2_diagnostic(
     settings: Settings,
     image_path: Path,
     video_path: Path,
-    output_root: Path = DEFAULT_DIAGNOSTIC_OUTPUT_ROOT,
-    photos_root: Path = DEFAULT_PHOTOS_ROOT,
+    output_root: Path | None = None,
+    photos_root: Path | None = None,
 ) -> MotionPhoto2DiagnosticResult:
     image_path = image_path.expanduser()
     video_path = video_path.expanduser()
+    if output_root is None:
+        output_root = settings.output_dir
+    if photos_root is None:
+        photos_root = settings.input_dir if settings.preserve_directory_structure else image_path.parent
     output_path = diagnostic_output_path(image_path, output_root=output_root, photos_root=photos_root)
     command = settings.build_motionphoto2_command(
         image_path=image_path,
@@ -159,7 +176,6 @@ def run_motionphoto2_diagnostic(
     logger.info("image exists: %s path=%s", image_exists, image_path)
     logger.info("video exists: %s path=%s", video_exists, video_path)
     logger.info("output path: %s", output_path)
-    logger.info("MotionPhoto2 command: %s", shlex.join(command))
 
     if not image_exists or not video_exists:
         missing = []
@@ -168,9 +184,6 @@ def run_motionphoto2_diagnostic(
         if not video_exists:
             missing.append(f"video not found: {video_path}")
         reason = "; ".join(missing)
-        logger.info("return code: %s", None)
-        logger.info("stdout:\n%s", "")
-        logger.info("stderr:\n%s", reason)
         return MotionPhoto2DiagnosticResult(
             success=False,
             reason=reason,
@@ -185,66 +198,65 @@ def run_motionphoto2_diagnostic(
             stderr=reason,
         )
 
+    returncode: int | None = None
+    stdout = ""
+    stderr = ""
+    success = False
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=settings.process_timeout_seconds,
-            check=False,
-        )
-    except Exception as exc:  # noqa: BLE001 - diagnostic endpoint must report invocation failures directly.
+        with media_staging_directory(
+            settings.db_path.parent,
+            media_roots=(settings.input_dir, output_root, settings.archive_dir, settings.failed_dir),
+        ) as staging:
+            staged_output = Path(staging) / output_path.name
+            command = settings.build_motionphoto2_command(
+                image_path=image_path,
+                video_path=video_path,
+                output_path=staged_output,
+            )
+            logger.info("MotionPhoto2 command: %s", shlex.join(command))
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=settings.process_timeout_seconds,
+                check=False,
+            )
+            returncode = result.returncode
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            # A private empty directory proves provenance even when the tool
+            # copies the original media's old filesystem timestamps.
+            actual_output = resolve_motionphoto_output(staged_output) if returncode == 0 else None
+            if actual_output is not None:
+                output_path = publish_unique_file(actual_output, output_path.parent, marker="diagnostic")
+                logger.info("actual output path: %s", output_path)
+                success = True
+                reason = "MotionPhoto2 diagnostic conversion succeeded"
+            elif returncode != 0:
+                reason = f"MotionPhoto2 exited with code {returncode}"
+                if stderr.strip():
+                    reason = f"{reason}: {stderr.strip()}"
+            else:
+                reason = f"MotionPhoto2 exited with code 0 but output file was not created: {output_path}"
+    except Exception as exc:  # noqa: BLE001 - report invocation and publication failures directly.
         stderr = traceback.format_exc()
-        reason = f"MotionPhoto2 invocation failed: {exc}"
-        logger.exception("MotionPhoto2 diagnostic invocation raised exception")
-        logger.info("return code: %s", None)
-        logger.info("stdout:\n%s", "")
-        logger.info("stderr:\n%s", stderr.rstrip())
-        return MotionPhoto2DiagnosticResult(
-            success=False,
-            reason=reason,
-            image_path=image_path,
-            video_path=video_path,
-            output_path=output_path,
-            image_exists=image_exists,
-            video_exists=video_exists,
-            command=command,
-            returncode=None,
-            stdout="",
-            stderr=stderr,
-        )
+        reason = f"MotionPhoto2 diagnostic failed: {exc}"
+        logger.exception("MotionPhoto2 diagnostic raised exception")
 
-    stdout = result.stdout or ""
-    stderr = result.stderr or ""
-    logger.info("return code: %s", result.returncode)
+    logger.info("return code: %s", returncode)
     logger.info("stdout:\n%s", stdout.rstrip())
     logger.info("stderr:\n%s", stderr.rstrip())
-
-    actual_output_path = resolve_motionphoto_output(output_path) if result.returncode == 0 else output_path
-    if actual_output_path != output_path:
-        logger.info("actual output path: %s", actual_output_path)
-
-    success = result.returncode == 0 and actual_output_path is not None and actual_output_path.is_file()
-    if success:
-        reason = "MotionPhoto2 diagnostic conversion succeeded"
-    elif result.returncode != 0:
-        reason = f"MotionPhoto2 exited with code {result.returncode}"
-        if stderr.strip():
-            reason = f"{reason}: {stderr.strip()}"
-    else:
-        reason = f"MotionPhoto2 exited with code 0 but output file was not created: {output_path}"
-
     return MotionPhoto2DiagnosticResult(
         success=success,
         reason=reason,
         image_path=image_path,
         video_path=video_path,
-        output_path=actual_output_path or output_path,
+        output_path=output_path,
         image_exists=image_exists,
         video_exists=video_exists,
         command=command,
-        returncode=result.returncode,
+        returncode=returncode,
         stdout=stdout,
         stderr=stderr,
     )

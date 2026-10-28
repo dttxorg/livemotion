@@ -71,7 +71,9 @@ def main() -> int:
         serve(app, host=settings.web_host, port=settings.web_port, threads=8)
     finally:
         worker.stop()
-        worker_thread.join(timeout=5)
+        # stop() terminates an active converter. Its worker must finish using
+        # the store before the shared SQLite connection is closed.
+        worker_thread.join()
         store.close()
     return 0
 

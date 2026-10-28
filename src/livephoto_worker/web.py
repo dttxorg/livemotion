@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from flask import Flask, Response, redirect, render_template, request, url_for
+from flask import Flask, Response, redirect, render_template, request, send_from_directory, url_for
 
 from .db import ProcessingStore
 from .diagnostics import MotionPhoto2DiagnosticResult, MotionPhoto2Status, run_motionphoto2_diagnostic
 from .logging_buffer import RecentLogHandler
-from .settings import Settings
+from .settings import Settings, SettingsValidationError
 from .worker import LivePhotoWorker
 
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 GITHUB_URL = "https://github.com/dttxorg/livemotion"
 DEFAULT_DIRECTORY_PRESET = {
     "input_dir": "/photos/live_inbox",
@@ -53,26 +54,20 @@ LOG_LEVEL_BADGES = {
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 LOG_LEVEL_RE = re.compile(r"\b(DEBUG|INFO|WARNING|ERROR|CRITICAL)\b")
 
-FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#2563eb"/><path d="M25 18l23 14-23 14z" fill="#fff"/><circle cx="20" cy="20" r="5" fill="#93c5fd"/></svg>"""
-
 
 def _form_to_config(form: Any) -> dict[str, Any]:
     return {
-        "input_dir": form.get("input_dir", "").strip(),
-        "output_dir": form.get("output_dir", "").strip(),
-        "archive_dir": form.get("archive_dir", "").strip(),
-        "failed_dir": form.get("failed_dir", "").strip(),
-        "stable_seconds": float(form.get("stable_seconds", 30)),
-        "poll_interval": float(form.get("poll_interval", 10)),
+        "input_dir": form.get("input_dir", ""),
+        "output_dir": form.get("output_dir", ""),
+        "archive_dir": form.get("archive_dir", ""),
+        "failed_dir": form.get("failed_dir", ""),
+        "stable_seconds": form.get("stable_seconds", ""),
+        "poll_interval": form.get("poll_interval", ""),
         "move_originals": "move_originals" in form,
         "enable_archive": "enable_archive" in form,
         "recursive_scan": "recursive_scan" in form,
         "preserve_directory_structure": "preserve_directory_structure" in form,
-        "skip_dir_names": [
-            line.strip()
-            for line in form.get("skip_dir_names", "").replace(",", "\n").splitlines()
-            if line.strip()
-        ],
+        "skip_dir_names": form.get("skip_dir_names", ""),
     }
 
 
@@ -126,7 +121,10 @@ def _queue_count(worker: LivePhotoWorker) -> int:
 def _format_timestamp(value: float | int | None) -> str:
     if value is None:
         return "暂无等待"
-    return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return "超出可显示时间范围"
 
 
 def _format_job_timestamp(value: object | None) -> str:
@@ -174,30 +172,30 @@ def _candidate_rows(worker: LivePhotoWorker) -> list[dict[str, object]]:
     return rows
 
 
-def _dir_fields(settings: Settings) -> list[dict[str, str]]:
+def _dir_fields(values: dict[str, Any]) -> list[dict[str, str]]:
     return [
         {
             "name": "input_dir",
             "label": "Live Photo 输入目录",
-            "value": str(settings.input_dir),
+            "value": str(values["input_dir"]),
             "help": "同步工具写入照片和视频文件的位置。",
         },
         {
             "name": "output_dir",
             "label": "Pixel 同步输出目录",
-            "value": str(settings.output_dir),
+            "value": str(values["output_dir"]),
             "help": "Pixel 或 Syncthing 只需要同步此整理后的目录。",
         },
         {
             "name": "archive_dir",
             "label": "原始文件归档目录",
-            "value": str(settings.archive_dir),
+            "value": str(values["archive_dir"]),
             "help": "开启归档且移动原文件时的目标目录。",
         },
         {
             "name": "failed_dir",
             "label": "失败文件目录",
-            "value": str(settings.failed_dir),
+            "value": str(values["failed_dir"]),
             "help": "处理失败的文件会移动到这里，避免重复尝试。",
         },
     ]
@@ -233,9 +231,12 @@ def create_app(
         title: str,
         *,
         message: str = "",
-        diagnostic_image: str = "/photos/2026/5/IMG_0056.HEIC",
-        diagnostic_video: str = "/photos/2026/5/IMG_0056.MOV",
+        diagnostic_image: str = "",
+        diagnostic_video: str = "",
         diagnostic_result: dict[str, object] | None = None,
+        form_values: dict[str, Any] | None = None,
+        field_errors: dict[str, str] | None = None,
+        form_error: str = "",
     ) -> str:
         stats = store.stats()
         recent_jobs = store.recent_jobs(limit=20)
@@ -247,6 +248,7 @@ def create_app(
             (max(int(point["completed"]), int(point["failed"])) for point in trend),
             default=1,
         )
+        values = settings.to_config_dict() if form_values is None else form_values
         return render_template(
             template_name,
             page=page,
@@ -257,8 +259,8 @@ def create_app(
             dashboard_jobs=recent_jobs[:5],
             latest_job_text=_format_job_timestamp(stats.get("latest_job_at")),
             log_entries=log_entries,
-            pending_status=_pending_status(worker),
-            candidate_rows=_candidate_rows(worker),
+            pending_status=_pending_status(worker) if page in {"dashboard", "debug_candidates"} else {},
+            candidate_rows=_candidate_rows(worker) if page == "debug_candidates" else [],
             app_version=APP_VERSION,
             github_url=GITHUB_URL,
             message=message,
@@ -266,7 +268,10 @@ def create_app(
             diagnostic_image=diagnostic_image,
             diagnostic_video=diagnostic_video,
             diagnostic_result=diagnostic_result,
-            dir_fields=_dir_fields(settings),
+            dir_fields=_dir_fields(values),
+            form_values=values,
+            field_errors=field_errors or {},
+            form_error=form_error,
             default_directories=DEFAULT_DIRECTORY_PRESET,
             status_label=_status_label,
             status_badge=_status_badge,
@@ -313,25 +318,46 @@ def create_app(
             "diagnostic.html",
             "diagnostic_pair",
             "文件对诊断",
-            diagnostic_image=request.args.get("image", "/photos/2026/5/IMG_0056.HEIC"),
-            diagnostic_video=request.args.get("video", "/photos/2026/5/IMG_0056.MOV"),
+            diagnostic_image=request.args.get("image", ""),
+            diagnostic_video=request.args.get("video", ""),
         )
 
     @app.get("/favicon.svg")
     def favicon() -> Response:
-        return Response(FAVICON_SVG, mimetype="image/svg+xml")
+        icon_path = Path(app.static_folder) / "livemotion-icon.svg"
+        return Response(icon_path.read_bytes(), mimetype="image/svg+xml")
+
+    @app.get("/favicon.png")
+    @app.get("/favicon.ico")
+    def favicon_png() -> Response:
+        return send_from_directory(app.static_folder, "livemotion-icon-64.png", mimetype="image/png")
 
     @app.post("/save")
     def save_config():  # type: ignore[no-untyped-def]
         new_config = _form_to_config(request.form)
-        settings.update_from_config(new_config, save=True)
-        worker.clear_pending()
+        try:
+            # A scan uses Settings throughout conversion and archival. Publish all
+            # fields and reset its queues together, between complete scans only.
+            with getattr(worker, "scan_lock", nullcontext()):
+                settings.update_from_config(new_config, save=True)
+                worker.clear_pending()
+        except SettingsValidationError as exc:
+            return render_page(
+                "settings.html", "settings", "设置", form_values=new_config,
+                field_errors=exc.errors, form_error="请检查标记的字段，配置尚未保存。",
+            ), 400
+        except OSError as exc:
+            app.logger.warning("Configuration save failed: %s", exc)
+            return render_page(
+                "settings.html", "settings", "设置", form_values=new_config,
+                form_error=f"配置保存失败：{exc}。原配置保持不变，请检查目录与写入权限后重试。",
+            ), 400
         return redirect(url_for("settings_page", message="配置已保存并立即生效"))
 
     @app.post("/scan")
     def scan_now():  # type: ignore[no-untyped-def]
         processed_count = worker.scan_once()
-        return redirect(url_for("index", message=f"已立即扫描，本轮处理 {processed_count} 对文件"))
+        return redirect(url_for("index", message=f"已立即扫描，本轮处理 {processed_count} 个候选"))
 
     @app.post("/scan/force")
     def force_scan_now():  # type: ignore[no-untyped-def]
@@ -343,9 +369,20 @@ def create_app(
         return redirect(url_for("index", message=f"已强制扫描并忽略稳定等待，本轮处理 {processed_count} 个候选"))
 
     @app.post("/debug/test-pair")
-    def test_pair_run() -> str:
-        image = request.form.get("image", "/photos/2026/5/IMG_0056.HEIC").strip()
-        video = request.form.get("video", "/photos/2026/5/IMG_0056.MOV").strip()
+    def test_pair_run() -> str | tuple[str, int]:
+        image = request.form.get("image", "").strip()
+        video = request.form.get("video", "").strip()
+        errors = {
+            field: f"请填写{label}文件的绝对路径。"
+            for field, label, value in (("image", "图片", image), ("video", "视频", video))
+            if not value or "\x00" in value or not Path(value).is_absolute()
+        }
+        if errors:
+            return render_page(
+                "diagnostic.html", "diagnostic_pair", "文件对诊断",
+                diagnostic_image=image, diagnostic_video=video, field_errors=errors,
+                form_error="诊断尚未运行，请检查标记的文件路径。",
+            ), 400
         result = run_diagnostic(Path(image), Path(video))
         return render_page(
             "diagnostic.html",

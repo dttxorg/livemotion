@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
-from dataclasses import asdict, dataclass, field
+import tempfile
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,12 @@ CONFIG_KEYS = {
     "recursive_scan",
     "preserve_directory_structure",
     "skip_dir_names",
+}
+DIRECTORY_LABELS = {
+    "input_dir": "Live Photo 输入目录",
+    "output_dir": "Pixel 同步输出目录",
+    "archive_dir": "原始文件归档目录",
+    "failed_dir": "失败文件目录",
 }
 
 DEFAULT_SKIP_DIR_NAMES = [
@@ -57,8 +65,23 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in TRUTHY
 
 
+class SettingsValidationError(ValueError):
+    def __init__(self, errors: dict[str, str]):
+        self.errors = errors
+        super().__init__("；".join(errors.values()))
+
+
 def _coerce_path(value: Any) -> Path:
-    return Path(str(value)).expanduser()
+    if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
+        raise ValueError("请填写非空的绝对目录路径。")
+    path = Path(str(value).strip()).expanduser()
+    if not path.is_absolute():
+        raise ValueError("请填写绝对目录路径，例如 /photos/live_inbox。")
+    # resolve also rejects malformed paths and lets alias checks include symlinks.
+    path.resolve(strict=False)
+    if path.exists() and not path.is_dir():
+        raise ValueError("此路径已被文件占用，请选择目录。")
+    return path
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -109,6 +132,9 @@ class Settings:
     web_host: str = os.getenv("WEB_HOST", "0.0.0.0")
     web_port: int = env_int("WEB_PORT", 8011)
 
+    def __post_init__(self) -> None:
+        self.apply_config({})
+
     @classmethod
     def load(cls, config_path: Path | None = None) -> "Settings":
         settings = cls()
@@ -127,28 +153,59 @@ class Settings:
         self.apply_config(raw)
 
     def apply_config(self, raw: dict[str, Any]) -> None:
-        if "input_dir" in raw:
-            self.input_dir = _coerce_path(raw["input_dir"])
-        if "output_dir" in raw:
-            self.output_dir = _coerce_path(raw["output_dir"])
-        if "archive_dir" in raw:
-            self.archive_dir = _coerce_path(raw["archive_dir"])
-        if "failed_dir" in raw:
-            self.failed_dir = _coerce_path(raw["failed_dir"])
-        if "stable_seconds" in raw:
-            self.stable_seconds = float(raw["stable_seconds"])
-        if "poll_interval" in raw:
-            self.poll_interval = float(raw["poll_interval"])
-        if "move_originals" in raw:
-            self.move_originals = _coerce_bool(raw["move_originals"])
-        if "enable_archive" in raw:
-            self.enable_archive = _coerce_bool(raw["enable_archive"])
-        if "recursive_scan" in raw:
-            self.recursive_scan = _coerce_bool(raw["recursive_scan"])
-        if "preserve_directory_structure" in raw:
-            self.preserve_directory_structure = _coerce_bool(raw["preserve_directory_structure"])
-        if "skip_dir_names" in raw:
-            self.skip_dir_names = _coerce_str_list(raw["skip_dir_names"])
+        self._apply_config_values(self._validated_config_values(raw))
+
+    def _validated_config_values(self, raw: dict[str, Any]) -> dict[str, Any]:
+        values = {key: raw.get(key, getattr(self, key)) for key in CONFIG_KEYS}
+        errors: dict[str, str] = {}
+        resolved_paths: dict[str, Path] = {}
+        for key, label in DIRECTORY_LABELS.items():
+            try:
+                values[key] = _coerce_path(values[key])
+                resolved_paths[key] = values[key].resolve(strict=False)
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                errors[key] = f"{label}：{exc}"
+
+        for key, label, minimum_allowed in (
+            ("stable_seconds", "文件稳定等待时间", True),
+            ("poll_interval", "扫描间隔", False),
+        ):
+            try:
+                number = float(values[key])
+                if not math.isfinite(number) or number < 0 or (not minimum_allowed and number == 0):
+                    raise ValueError
+                values[key] = number
+            except (TypeError, ValueError, OverflowError):
+                comparison = "大于或等于 0" if minimum_allowed else "大于 0"
+                errors[key] = f"{label}须为{comparison} 的有限数字。"
+
+        input_path = resolved_paths.get("input_dir")
+        destinations = ("output_dir", "archive_dir", "failed_dir")
+        for key in destinations:
+            path = resolved_paths.get(key)
+            if input_path is not None and path is not None and input_path.is_relative_to(path):
+                errors[key] = f"{DIRECTORY_LABELS[key]}须与输入目录不同，且不包含输入目录。"
+        for index, key in enumerate(destinations):
+            path = resolved_paths.get(key)
+            if path is None:
+                continue
+            for other_key in destinations[index + 1:]:
+                other_path = resolved_paths.get(other_key)
+                if other_path is not None and (path.is_relative_to(other_path) or other_path.is_relative_to(path)):
+                    message = f"{DIRECTORY_LABELS[key]}与{DIRECTORY_LABELS[other_key]}须分别独立，避免相同或互相包含。"
+                    errors[key] = message
+                    errors[other_key] = message
+
+        for key in ("move_originals", "enable_archive", "recursive_scan", "preserve_directory_structure"):
+            values[key] = _coerce_bool(values[key])
+        values["skip_dir_names"] = _coerce_str_list(values["skip_dir_names"])
+        if errors:
+            raise SettingsValidationError(errors)
+        return values
+
+    def _apply_config_values(self, values: dict[str, Any]) -> None:
+        for key, value in values.items():
+            setattr(self, key, value)
 
     def to_config_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -158,17 +215,34 @@ class Settings:
         }
 
     def save_config(self) -> None:
+        self._validated_config_values({})
+        serialized = json.dumps(
+            self.to_config_dict(), ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+        ) + "\n"
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(
-            json.dumps(self.to_config_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.config_path.parent,
+                prefix=f".{self.config_path.name}.", suffix=".tmp", delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, self.config_path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def update_from_config(self, new_config: dict[str, Any], *, save: bool = True) -> None:
-        self.apply_config(new_config)
-        self.ensure_directories()
+        values = self._validated_config_values(new_config)
+        candidate = replace(self, **values)
+        candidate.ensure_directories()
         if save:
-            self.save_config()
+            candidate.save_config()
+        # Publish only after validation, directory creation and persistence succeed.
+        self._apply_config_values(values)
 
     @property
     def transfer_settle_seconds(self) -> float:

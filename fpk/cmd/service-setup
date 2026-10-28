@@ -5,10 +5,30 @@ CONFIG_DIR="/vol1/docker/livephoto-worker/config"
 DEFAULT_CONFIG="${CONFIG_DIR}/config.json"
 
 create_livemotion_defaults() {
-    mkdir -p "${PHOTOS_DIR}/live_inbox" "${PHOTOS_DIR}/motion_output" "${PHOTOS_DIR}/archive" "${PHOTOS_DIR}/failed" 2>/dev/null || true
-    mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
-    if [ ! -f "$DEFAULT_CONFIG" ]; then
-        cat > "$DEFAULT_CONFIG" <<'JSON'
+    local directory relative volume temporary_config
+    for directory in "$PHOTOS_DIR" "$CONFIG_DIR"; do
+        case "$directory" in
+            /vol[0-9]*/*)
+                relative="${directory#/}"
+                volume="/${relative%%/*}"
+                if [ ! -d "$volume" ]; then
+                    install_log "Storage volume is missing: $volume"
+                    return 1
+                fi
+                ;;
+        esac
+    done
+    mkdir -p "${PHOTOS_DIR}/live_inbox" "${PHOTOS_DIR}/motion_output" "${PHOTOS_DIR}/archive" "${PHOTOS_DIR}/failed" || return $?
+    mkdir -p "${CONFIG_DIR}" || return $?
+    if [ -f "$DEFAULT_CONFIG" ]; then
+        return 0
+    fi
+    if [ -e "$DEFAULT_CONFIG" ] || [ -L "$DEFAULT_CONFIG" ]; then
+        install_log "Configuration path is not a regular file: $DEFAULT_CONFIG"
+        return 1
+    fi
+    temporary_config=$(mktemp "${CONFIG_DIR}/.config.json.XXXXXX") || return $?
+    if cat > "$temporary_config" <<'JSON'
 {
   "input_dir": "/photos/live_inbox",
   "output_dir": "/photos/motion_output",
@@ -20,6 +40,19 @@ create_livemotion_defaults() {
   "enable_archive": true
 }
 JSON
+    then
+        :
+    else
+        local result=$?
+        rm -f "$temporary_config"
+        return "$result"
+    fi
+    if mv "$temporary_config" "$DEFAULT_CONFIG"; then
+        return 0
+    else
+        local result=$?
+        rm -f "$temporary_config"
+        return "$result"
     fi
 }
 

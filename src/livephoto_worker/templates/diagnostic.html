@@ -10,17 +10,21 @@
   <a class="btn btn-outline-secondary" href="{{ url_for('logs_page') }}">查看日志</a>
 </section>
 
+{% if form_error %}<div class="alert alert-danger app-alert" role="alert">{{ form_error }}</div>{% endif %}
+
 <section class="app-card mb-4" aria-labelledby="diagnostic-form-title">
   <div class="section-heading"><div><div class="section-kicker">手动复现</div><h2 id="diagnostic-form-title">测试指定文件对</h2></div></div>
   <form method="post" action="{{ url_for('test_pair_run') }}">
     <div class="row g-3">
       <div class="col-lg-6">
         <label class="form-label config-label" for="diagnostic_image">图片文件路径</label>
-        <input class="form-control text-path" id="diagnostic_image" name="image" type="text" value="{{ diagnostic_image }}" required>
+        <input class="form-control text-path{% if field_errors.get('image') %} is-invalid{% endif %}" id="diagnostic_image" name="image" type="text" value="{{ diagnostic_image }}" placeholder="例如：/photos/2026/5/IMG_0056.HEIC" {% if field_errors.get('image') %}aria-invalid="true" aria-describedby="diagnostic-image-error"{% endif %} required>
+        {% if field_errors.get('image') %}<div class="invalid-feedback" id="diagnostic-image-error">{{ field_errors.image }}</div>{% endif %}
       </div>
       <div class="col-lg-6">
         <label class="form-label config-label" for="diagnostic_video">视频文件路径</label>
-        <input class="form-control text-path" id="diagnostic_video" name="video" type="text" value="{{ diagnostic_video }}" required>
+        <input class="form-control text-path{% if field_errors.get('video') %} is-invalid{% endif %}" id="diagnostic_video" name="video" type="text" value="{{ diagnostic_video }}" placeholder="例如：/photos/2026/5/IMG_0056.MOV" {% if field_errors.get('video') %}aria-invalid="true" aria-describedby="diagnostic-video-error"{% endif %} required>
+        {% if field_errors.get('video') %}<div class="invalid-feedback" id="diagnostic-video-error">{{ field_errors.video }}</div>{% endif %}
       </div>
     </div>
     <div class="diagnostic-actions"><button type="submit" class="btn btn-primary">开始诊断</button><span>成功时输出会沿用原图格式，例如 HEIC 输出 .heic，JPG 输出 .jpg。</span></div>

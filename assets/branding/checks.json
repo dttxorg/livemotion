@@ -1,0 +1,284 @@
+{
+  "assets": [
+    {
+      "path": "assets/branding/livemotion-icon-master.png",
+      "size": [
+        1254,
+        1254
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        132,
+        151,
+        1122,
+        1106
+      ],
+      "transparent_pixels": 656162,
+      "sha256": "41f671c9e462cafa581982ab41c0925ed36fc50ce63a7a255130b5d56dec3db2"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-16.png",
+      "size": [
+        16,
+        16
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        2,
+        2,
+        14,
+        14
+      ],
+      "transparent_pixels": 58,
+      "sha256": "cdfd6bd9e333473e49487299258445602e53d5afac0aef198de6c355504a6a39"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-32.png",
+      "size": [
+        32,
+        32
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        3,
+        4,
+        29,
+        28
+      ],
+      "transparent_pixels": 278,
+      "sha256": "3ec14cf3ff12f982b5140f93ab89256a7767358a5c5b9a44cb3facb73bb1c31b"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-48.png",
+      "size": [
+        48,
+        48
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        5,
+        6,
+        43,
+        42
+      ],
+      "transparent_pixels": 731,
+      "sha256": "e73c46b1a620b39ce0ed09d8446288fca74ad0c09bd29220fb13ff218367f2d4"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-64.png",
+      "size": [
+        64,
+        64
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        7,
+        8,
+        57,
+        56
+      ],
+      "transparent_pixels": 1419,
+      "sha256": "e47f9b6f339100eb5b62f20cef1c670fa917a0ed99aa2094f15f339d6f754632"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-128.png",
+      "size": [
+        128,
+        128
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        13,
+        15,
+        114,
+        113
+      ],
+      "transparent_pixels": 6387,
+      "sha256": "9474477f335a3b7643df4ee70430c6c82878e263aaf1384b24510438e1ef4628"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-256.png",
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        27,
+        31,
+        229,
+        226
+      ],
+      "transparent_pixels": 26586,
+      "sha256": "5d20f5b1a01b80bbdb3165ad9435e5bb06670c50025fa5cbf0450dd479c7199c"
+    },
+    {
+      "path": "assets/branding/exports/livemotion-icon-512.png",
+      "size": [
+        512,
+        512
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        54,
+        62,
+        458,
+        452
+      ],
+      "transparent_pixels": 108653,
+      "sha256": "e8fd5df39e53ee7539f984763a88b18486f179d756bd6c7d4d3f45ed44f3fd39"
+    },
+    {
+      "path": "fpk/icon.png",
+      "size": [
+        64,
+        64
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        7,
+        8,
+        57,
+        56
+      ],
+      "transparent_pixels": 1419,
+      "sha256": "e47f9b6f339100eb5b62f20cef1c670fa917a0ed99aa2094f15f339d6f754632"
+    },
+    {
+      "path": "fpk/ICON_256.PNG",
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        27,
+        31,
+        229,
+        226
+      ],
+      "transparent_pixels": 26586,
+      "sha256": "5d20f5b1a01b80bbdb3165ad9435e5bb06670c50025fa5cbf0450dd479c7199c"
+    },
+    {
+      "path": "fpk/ui/images/64.png",
+      "size": [
+        64,
+        64
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        7,
+        8,
+        57,
+        56
+      ],
+      "transparent_pixels": 1419,
+      "sha256": "e47f9b6f339100eb5b62f20cef1c670fa917a0ed99aa2094f15f339d6f754632"
+    },
+    {
+      "path": "fpk/ui/images/256.png",
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        27,
+        31,
+        229,
+        226
+      ],
+      "transparent_pixels": 26586,
+      "sha256": "5d20f5b1a01b80bbdb3165ad9435e5bb06670c50025fa5cbf0450dd479c7199c"
+    },
+    {
+      "path": "src/livephoto_worker/static/livemotion-icon-64.png",
+      "size": [
+        64,
+        64
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        7,
+        8,
+        57,
+        56
+      ],
+      "transparent_pixels": 1419,
+      "sha256": "e47f9b6f339100eb5b62f20cef1c670fa917a0ed99aa2094f15f339d6f754632"
+    },
+    {
+      "path": "src/livephoto_worker/static/livemotion-icon-256.png",
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGBA",
+      "alpha_range": [
+        0,
+        255
+      ],
+      "visible_bbox_alpha_128": [
+        27,
+        31,
+        229,
+        226
+      ],
+      "transparent_pixels": 26586,
+      "sha256": "5d20f5b1a01b80bbdb3165ad9435e5bb06670c50025fa5cbf0450dd479c7199c"
+    }
+  ]
+}

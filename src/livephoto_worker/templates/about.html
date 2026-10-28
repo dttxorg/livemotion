@@ -2,7 +2,7 @@
 {% import "macros.html" as ui %}
 {% block content %}
 <section class="app-card about-card">
-  <div class="about-logo" aria-hidden="true">▶</div>
+  <img src="{{ url_for('static', filename='livemotion-icon-256.png') }}" width="88" height="88" class="d-inline-block" alt="" aria-hidden="true">
   <div class="eyebrow">关于 LiveMotion</div>
   <h1>Live Photo 自动整理服务</h1>
   <p class="about-intro">将 Live Photo 合成为 Google Motion Photo，并把普通照片和视频整理到 Pixel 同步输出目录。</p>

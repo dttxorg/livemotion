@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        MOTIONPHOTO2_VERSION: v2.7.7
+        MOTIONPHOTO2_REF: v2.7.7
     image: livephoto-worker:latest
     container_name: livephoto-worker
     restart: unless-stopped

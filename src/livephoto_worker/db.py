@@ -66,31 +66,53 @@ class ProcessingStore:
             )
             self.conn.commit()
 
-    def is_processed(self, pair_signature: str) -> bool:
+    def processed_pair_output(self, pair_signature: str) -> Path | None:
         with self.lock:
             row = self.conn.execute(
-                "SELECT 1 FROM processed_pairs WHERE pair_signature = ? LIMIT 1",
+                "SELECT output_path FROM processed_pairs WHERE pair_signature = ? LIMIT 1",
                 (pair_signature,),
             ).fetchone()
-        return row is not None
+        return self._existing_output(row)
 
-    def is_file_processed(self, file_signature: str) -> bool:
+    def processed_file_output(self, file_signature: str) -> Path | None:
         with self.lock:
             row = self.conn.execute(
-                "SELECT 1 FROM processed_files WHERE file_signature = ? LIMIT 1",
+                "SELECT output_path FROM processed_files WHERE file_signature = ? LIMIT 1",
                 (file_signature,),
             ).fetchone()
-        return row is not None
+        return self._existing_output(row)
+
+    @staticmethod
+    def _existing_output(row: sqlite3.Row | None) -> Path | None:
+        if row is None:
+            return None
+        output = Path(row["output_path"])
+        try:
+            return output if output.is_file() else None
+        except OSError:
+            return None
+
+    def is_processed(self, pair_signature: str) -> bool:
+        return self.processed_pair_output(pair_signature) is not None
+
+    def is_file_processed(self, file_signature: str) -> bool:
+        return self.processed_file_output(file_signature) is not None
 
     def record_success(self, pair: MediaPair, hashes: PairHashes, output_path: Path) -> None:
         now = utc_now()
         with self.lock, self.conn:
             self.conn.execute(
                 """
-                INSERT OR IGNORE INTO processed_pairs (
+                INSERT INTO processed_pairs (
                     pair_signature, stem, image_name, video_name,
                     image_sha256, video_sha256, output_path, processed_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pair_signature) DO UPDATE SET
+                    stem = excluded.stem,
+                    image_name = excluded.image_name,
+                    video_name = excluded.video_name,
+                    output_path = excluded.output_path,
+                    processed_at = excluded.processed_at
                 """,
                 (
                     hashes.signature,
@@ -142,9 +164,14 @@ class ProcessingStore:
         with self.lock, self.conn:
             self.conn.execute(
                 """
-                INSERT OR IGNORE INTO processed_files (
+                INSERT INTO processed_files (
                     file_signature, media_type, file_name, file_sha256, output_path, processed_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_signature) DO UPDATE SET
+                    media_type = excluded.media_type,
+                    file_name = excluded.file_name,
+                    output_path = excluded.output_path,
+                    processed_at = excluded.processed_at
                 """,
                 (
                     file_signature,

@@ -84,12 +84,16 @@ class LivePhotoWorker:
         self.processor = processor
         self.pending: dict[str, PendingWork] = {}
         self.completed_states: dict[str, str] = {}
+        self.completed_outputs: dict[str, Path] = {}
         self.stop_event = threading.Event()
         self.scan_lock = threading.RLock()
         self.scan_stats = WorkerScanStats()
 
     def stop(self) -> None:
         self.stop_event.set()
+        stop_processor = getattr(self.processor, "stop", None)
+        if stop_processor is not None:
+            stop_processor()
 
     def run_forever(self) -> None:
         logger.info(
@@ -104,14 +108,18 @@ class LivePhotoWorker:
             self.settings.preserve_directory_structure,
         )
         while not self.stop_event.is_set():
-            self.scan_once()
-            self.stop_event.wait(self.settings.poll_interval)
+            try:
+                self.scan_once()
+            except Exception:  # noqa: BLE001 - transient filesystem/store errors must not kill the daemon.
+                logger.exception("Scan failed; retrying after the polling interval")
+            self.stop_event.wait(min(self.settings.poll_interval, threading.TIMEOUT_MAX))
         logger.info("Worker stopped")
 
     def clear_pending(self) -> None:
         with self.scan_lock:
             self.pending.clear()
             self.completed_states.clear()
+            self.completed_outputs.clear()
 
     def scan_once(self, now: float | None = None) -> int:
         with self.scan_lock:
@@ -152,7 +160,7 @@ class LivePhotoWorker:
             stable = True
             try:
                 stable = candidate.is_stable_with(self._snapshot(candidate.kind, candidate.item))
-            except FileNotFoundError:
+            except OSError:
                 stable = False
             rows.append({
                 "key": key,
@@ -199,14 +207,21 @@ class LivePhotoWorker:
         suppressed_live_info = 0
 
         for pair in scan_result.pairs:
+            if self.stop_event.is_set():
+                return processed_count
             key = self._pending_key("pair", pair)
             seen_keys.add(key)
             try:
                 snapshot = self._snapshot("pair", pair)
             except FileNotFoundError:
+                self.pending.pop(key, None)
+                self._forget_completed(key)
                 logger.info("Candidate not processed: reason=missing_pair key=%s", key)
                 continue
-            if self.completed_states.get(key) == snapshot.quick_state:
+            except OSError:
+                logger.exception("Candidate not processed: reason=stat_failed key=%s", key)
+                continue
+            if self._already_completed(key, snapshot):
                 skipped += 1
                 logger.info("Candidate not processed: reason=already_processed key=%s", key)
                 continue
@@ -224,13 +239,19 @@ class LivePhotoWorker:
                 continue
 
             self.pending.pop(key, None)
-            result = self.processor.process(pair)
+            try:
+                result = self.processor.process(pair)
+            except Exception:  # noqa: BLE001 - isolate an unexpected processor/store error to this candidate.
+                logger.exception("Unexpected processing failure for %s", key)
+                result = "failed"
+            if result == "cancelled":
+                return processed_count
             if result == "merged":
-                self.completed_states[key] = snapshot.quick_state
+                self._remember_completed(key, snapshot)
                 self.scan_stats.merged_live_photos += 1
                 processed_live += 1
             elif result == "skipped":
-                self.completed_states[key] = snapshot.quick_state
+                self._remember_completed(key, snapshot)
                 self.scan_stats.skipped += 1
                 skipped += 1
                 logger.info("Candidate not processed: reason=already_processed key=%s", key)
@@ -241,14 +262,21 @@ class LivePhotoWorker:
             processed_count += 1
 
         for item in scan_result.media_items:
+            if self.stop_event.is_set():
+                return processed_count
             key = self._pending_key("media", item)
             seen_keys.add(key)
             try:
                 snapshot = self._snapshot("media", item)
             except FileNotFoundError:
+                self.pending.pop(key, None)
+                self._forget_completed(key)
                 logger.info("Candidate not processed: reason=missing_pair key=%s", key)
                 continue
-            if self.completed_states.get(key) == snapshot.quick_state:
+            except OSError:
+                logger.exception("Candidate not processed: reason=stat_failed key=%s", key)
+                continue
+            if self._already_completed(key, snapshot):
                 skipped += 1
                 logger.info("Candidate not processed: reason=already_processed key=%s", key)
                 continue
@@ -259,17 +287,23 @@ class LivePhotoWorker:
                 continue
 
             self.pending.pop(key, None)
-            result = self.processor.process_media(item)
+            try:
+                result = self.processor.process_media(item)
+            except Exception:  # noqa: BLE001 - continue with the rest of the media library.
+                logger.exception("Unexpected processing failure for %s", key)
+                result = "failed"
+            if result == "cancelled":
+                return processed_count
             if result == "copied_photo":
-                self.completed_states[key] = snapshot.quick_state
+                self._remember_completed(key, snapshot)
                 self.scan_stats.copied_photos += 1
                 copied_photos += 1
             elif result == "copied_video":
-                self.completed_states[key] = snapshot.quick_state
+                self._remember_completed(key, snapshot)
                 self.scan_stats.copied_videos += 1
                 copied_videos += 1
             elif result == "skipped":
-                self.completed_states[key] = snapshot.quick_state
+                self._remember_completed(key, snapshot)
                 self.scan_stats.skipped += 1
                 skipped += 1
                 logger.info("Candidate not processed: reason=already_processed key=%s", key)
@@ -285,6 +319,9 @@ class LivePhotoWorker:
             logger.info("Candidate not processed: reason=missing_pair key=%s", key)
             logger.debug("Dropping stale pending work: %s", candidate)
             self.pending.pop(key, None)
+
+        for key in set(self.completed_states) - seen_keys:
+            self._forget_completed(key)
 
         if suppressed_live_info:
             logger.info("Detected %s additional Live Photo candidates; showing only first 10", suppressed_live_info)
@@ -315,6 +352,29 @@ class LivePhotoWorker:
             failed,
         )
         return processed_count
+
+    def _forget_completed(self, key: str) -> None:
+        self.completed_states.pop(key, None)
+        self.completed_outputs.pop(key, None)
+
+    def _already_completed(self, key: str, snapshot: CandidateSnapshot) -> bool:
+        if self.completed_states.get(key) != snapshot.quick_state:
+            return False
+        output = self.completed_outputs.get(key)
+        try:
+            if output is not None and output.is_file():
+                return True
+        except OSError:
+            pass
+        self._forget_completed(key)
+        logger.info("Candidate output is missing; scheduling regeneration: key=%s output=%s", key, output)
+        return False
+
+    def _remember_completed(self, key: str, snapshot: CandidateSnapshot) -> None:
+        output = getattr(self.processor, "last_output_path", None)
+        if output is not None:
+            self.completed_states[key] = snapshot.quick_state
+            self.completed_outputs[key] = output
 
     def _stable_decision(
         self,
